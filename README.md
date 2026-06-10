@@ -2,7 +2,7 @@
 
 ## Version
 
-Current version: **23.0.0**
+Current version: **25.0.0**
 
 **Sketch Curve Cleaner** is an Autodesk Fusion 360 add-in that helps preview and clean duplicated or overlapping sketch curves.
 
@@ -635,7 +635,7 @@ Version 22 disables this preview mode to improve performance on dense SVG import
 The add-in version is defined in the Python source:
 
 ```python
-ADDIN_VERSION = "23.0.0"
+ADDIN_VERSION = "25.0.0"
 ```
 
 The same version is also stored in the Fusion manifest file and displayed in the
@@ -909,3 +909,103 @@ Recommended mixed-sketch workflow:
 4. Apply only if the summary shows the expected standard sketch duplicates.
 5. Treat SVG geometry separately with clean_svg.py or Selected geometry only.
 ```
+
+
+## Version 24: selection-first mixed SVG workflow
+
+Version 24 changes the mixed SVG workflow.
+
+Important limitation:
+
+```text
+Once an SVG is imported into the same Fusion sketch, the add-in cannot reliably
+know which SketchLine came from the SVG and which SketchLine was manually drawn
+or created by normal Fusion tools.
+```
+
+For that reason, the safe workflow for a mixed sketch is now selection-first.
+
+New behavior:
+
+```text
+If supported sketch curves are already selected when Test or Apply is clicked,
+the add-in automatically limits the analysis to those selected curves.
+```
+
+This means you can clean normal duplicated sketch entities without scanning the
+whole SVG-heavy sketch.
+
+Recommended workflow:
+
+```text
+1. In the sketch, select the duplicated normal sketch entities you want to clean.
+2. Run Sketch Curve Cleaner.
+3. Click Test.
+4. Check that "Automatic selection scope" is yes.
+5. Click Apply.
+```
+
+If you want to process the whole sketch, clear the selection first. Be careful:
+when a dense SVG is in the same sketch, whole-sketch analysis may still be slow
+or may be blocked by safe mode.
+
+Best practice:
+
+```text
+- Keep imported SVG geometry in a separate sketch whenever possible.
+- Use clean_svg.py before importing large SVG files.
+- For mixed sketches, select the normal duplicated geometry explicitly.
+```
+
+
+## Version 25: ignore green / fixed geometry
+
+Version 25 adds a new option:
+
+```text
+Ignore green / fixed geometry
+```
+
+In Fusion 360, green sketch geometry usually indicates fixed geometry. Imported
+SVG linework often appears green/fixed, while normal under-constrained sketch
+geometry is usually blue.
+
+This option is enabled by default.
+
+Behavior:
+
+```text
+- fixed/green curves are ignored during Test and Apply;
+- blue/non-fixed sketch entities can still be cleaned;
+- the summary reports how many fixed/green curves were skipped.
+```
+
+This is useful when one sketch contains both:
+
+```text
+- imported SVG geometry shown in green;
+- normal duplicated sketch entities shown in blue.
+```
+
+Important limitation:
+
+```text
+Green means fixed, not necessarily SVG.
+```
+
+A manually drawn line can also be green if it has been fixed. A SVG line can
+become blue if it is unfixed. This is therefore a practical filter, not a perfect
+origin detector.
+
+Recommended workflow for mixed SVG sketches:
+
+```text
+1. Keep "Ignore green / fixed geometry" enabled.
+2. Keep SVG spline analysis disabled.
+3. Run Test.
+4. Check "Fixed/green curves skipped" in the summary.
+5. Apply only if the affected blue/non-fixed geometry is what you expect.
+```
+
+If you want to clean the imported SVG itself, disable this option or work on a
+separate selected copy of the SVG geometry.

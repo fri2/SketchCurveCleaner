@@ -53,7 +53,7 @@ import adsk.fusion
 # -----------------------------------------------------------------------------
 
 ADDIN_NAME = "Sketch Curve Cleaner"
-ADDIN_VERSION = "23.0.0"
+ADDIN_VERSION = "25.0.0"
 ADDIN_AUTHOR = "RICHARD Francois"
 ADDIN_LICENSE = "GPL-3.0-only"
 ADDIN_COPYRIGHT = "Copyright (C) 2026 RICHARD Francois"
@@ -123,7 +123,11 @@ _STRINGS = {
         "settings_group": "Cleanup options",
         "selected_only": "Selected geometry only",
         "line_only_fast": "Line-only fast mode for SVG imports",
+        "ignore_fixed": "Ignore green / fixed geometry",
         "selected_none": "Selected geometry only is enabled, but no supported sketch curves are selected. Select a few curves in the target sketch, then click Test again.",
+        "auto_selection_note": "Selection detected: analysis is limited to selected sketch curves. This is the recommended way to clean standard duplicates in a sketch that also contains imported SVG geometry.",
+        "mixed_line_warning": "Important: imported SVG lines and manually drawn sketch lines can both appear as SketchLine. The add-in cannot reliably distinguish their origin once they are in the same sketch.",
+        "ignore_fixed_warning": "Green geometry usually means fixed geometry in Fusion. This option ignores fixed/green curves, which is useful when imported SVG lines are green and normal sketch lines are blue.",
         "delete_exact": "Delete exact duplicate curves",
         "merge_lines": "Split/merge partially overlapping straight lines",
         "svg_splines": "Treat near-straight SVG/imported splines as lines (slower)",
@@ -160,7 +164,10 @@ _STRINGS = {
         "result_selection_limited": "Selection limited for performance",
         "result_selected_only": "Selected geometry only",
         "result_selected_count": "Selected curves used for analysis",
+        "result_auto_selected": "Automatic selection scope",
         "result_line_only_fast": "Line-only fast mode",
+        "result_ignore_fixed": "Ignore fixed/green geometry",
+        "result_fixed_skipped": "Fixed/green curves skipped",
         "result_circular_groups": "Overlapping circular curve groups",
         "result_circular_delete": "Circular curves to replace",
         "result_circular_create": "Merged circular curves to create",
@@ -204,7 +211,11 @@ _STRINGS = {
         "settings_group": "Options de nettoyage",
         "selected_only": "Géométrie sélectionnée uniquement",
         "line_only_fast": "Mode rapide lignes seulement pour imports SVG",
+        "ignore_fixed": "Ignorer la géométrie verte / fixée",
         "selected_none": "L’option géométrie sélectionnée uniquement est activée, mais aucune courbe d’esquisse prise en charge n’est sélectionnée. Sélectionnez quelques courbes dans l’esquisse cible, puis cliquez à nouveau sur Test.",
+        "auto_selection_note": "Sélection détectée : l’analyse est limitée aux courbes d’esquisse sélectionnées. C’est la méthode recommandée pour nettoyer des doublons standards dans une esquisse qui contient aussi une géométrie SVG importée.",
+        "mixed_line_warning": "Important : les lignes SVG importées et les lignes dessinées manuellement peuvent toutes apparaître comme SketchLine. L’add-in ne peut pas distinguer de manière fiable leur origine une fois qu’elles sont dans la même esquisse.",
+        "ignore_fixed_warning": "La géométrie verte correspond généralement à une géométrie fixée dans Fusion. Cette option ignore les courbes fixées/vertes, ce qui est utile lorsque les lignes SVG importées sont vertes et les lignes normales bleues.",
         "delete_exact": "Supprimer les courbes exactement dupliquées",
         "merge_lines": "Découper/fusionner les lignes droites partiellement superposées",
         "svg_splines": "Traiter les splines SVG/importées quasi droites comme des lignes (plus lent)",
@@ -241,7 +252,10 @@ _STRINGS = {
         "result_selection_limited": "Sélection limitée pour les performances",
         "result_selected_only": "Géométrie sélectionnée uniquement",
         "result_selected_count": "Courbes sélectionnées utilisées pour l’analyse",
+        "result_auto_selected": "Portée automatique par sélection",
         "result_line_only_fast": "Mode rapide lignes seulement",
+        "result_ignore_fixed": "Ignorer la géométrie fixée/verte",
+        "result_fixed_skipped": "Courbes fixées/vertes ignorées",
         "result_circular_groups": "Groupes de courbes circulaires superposées",
         "result_circular_delete": "Courbes circulaires à remplacer",
         "result_circular_create": "Courbes circulaires fusionnées à créer",
@@ -360,7 +374,9 @@ class CleanupSettings:
         self.allow_large_sketch_analysis = False
         self.selected_geometry_only = False
         self.selected_curves = None
+        self.auto_selected_geometry_scope = False
         self.line_only_fast_mode = False
+        self.ignore_fixed_geometry = True
         self.allow_reference_geometry = False
         self.allow_constrained_or_dimensioned = False
         self.merge_construction_and_normal = False
@@ -407,6 +423,7 @@ class CleanupPlan:
         self.svg_straight_spline_candidates = 0
         self.svg_spline_candidates_skipped = 0
         self.ignored_splines_due_to_svg_disabled = 0
+        self.fixed_geometry_skipped = 0
         self.active_guard_curve_count = 0
         self.preview_geometry_limited = False
         self.selection_limited = False
@@ -2721,8 +2738,11 @@ def build_summary(plan, title=None):
     lines.append("{}: {}".format(tr("result_sketch"), plan.sketch.name))
     lines.append("{}: {}".format(tr("result_active_count"), plan.active_guard_curve_count))
     lines.append("{}: {}".format(tr("result_ignored_splines"), plan.ignored_splines_due_to_svg_disabled))
+    lines.append("{}: {}".format(tr("result_fixed_skipped"), plan.fixed_geometry_skipped))
     lines.append("{}: {}".format(tr("result_selected_only"), "yes" if getattr(plan.settings, "selected_geometry_only", False) else "no"))
+    lines.append("{}: {}".format(tr("result_auto_selected"), "yes" if getattr(plan.settings, "auto_selected_geometry_scope", False) else "no"))
     lines.append("{}: {}".format(tr("result_line_only_fast"), "yes" if getattr(plan.settings, "line_only_fast_mode", False) else "no"))
+    lines.append("{}: {}".format(tr("result_ignore_fixed"), "yes" if getattr(plan.settings, "ignore_fixed_geometry", True) else "no"))
     if getattr(plan.settings, "selected_curves", None) is not None:
         lines.append("{}: {}".format(tr("result_selected_count"), len(plan.settings.selected_curves)))
     lines.append("{}: {} cm".format(tr("result_tolerance"), plan.settings.tolerance_cm))
@@ -2785,6 +2805,64 @@ def set_textbox_text(textbox, text):
 
 
 
+
+# -----------------------------------------------------------------------------
+# Version 25 fixed / green geometry filtering
+# -----------------------------------------------------------------------------
+
+def curve_is_fixed_or_green(curve):
+    """
+    Return True when a sketch curve appears to be fixed/green in Fusion.
+
+    Fusion commonly displays fixed sketch geometry in green. Imported SVG
+    linework often arrives fixed, while manually created under-constrained
+    geometry is usually blue. This is a heuristic: fixed means fixed, not
+    necessarily SVG.
+    """
+    try:
+        if bool(curve.isFixed):
+            return True
+    except:
+        pass
+
+    # Some API objects expose fixed state only through connected sketch points.
+    for point_attr in ("startSketchPoint", "endSketchPoint", "centerSketchPoint"):
+        try:
+            point = getattr(curve, point_attr)
+            if point and bool(point.isFixed):
+                return True
+        except:
+            pass
+
+    return False
+
+
+def should_skip_fixed_geometry(curve, settings, plan=None):
+    """
+    Decide whether a curve should be ignored because it is fixed/green.
+
+    Parameters:
+        curve: Fusion sketch curve.
+        settings (CleanupSettings): Current cleanup settings.
+        plan (CleanupPlan | None): Optional plan for statistics.
+
+    Returns:
+        bool: True when the curve must be skipped.
+    """
+    if not getattr(settings, "ignore_fixed_geometry", True):
+        return False
+
+    if curve_is_fixed_or_green(curve):
+        try:
+            if plan:
+                plan.fixed_geometry_skipped += 1
+        except:
+            pass
+        return True
+
+    return False
+
+
 # -----------------------------------------------------------------------------
 # Version 21 performance helpers: selected-only and line-only fast mode
 # -----------------------------------------------------------------------------
@@ -2843,6 +2921,9 @@ def selected_curves_from_ui(ui, sketch, settings):
         except:
             pass
 
+        if should_skip_fixed_geometry(entity, settings, None):
+            continue
+
         if getattr(settings, "line_only_fast_mode", False):
             if line_like_segment_from_curve(entity, settings) is None:
                 continue
@@ -2880,6 +2961,8 @@ def curves_for_exact_duplicate_scan(sketch, settings, plan=None):
     selected_curves = getattr(settings, "selected_curves", None)
     if selected_curves is not None:
         for curve in selected_curves:
+            if should_skip_fixed_geometry(curve, settings, plan):
+                continue
             if getattr(settings, "line_only_fast_mode", False) and not is_line_only_fast_curve(curve, settings):
                 continue
             yield curve
@@ -2935,7 +3018,10 @@ def curves_for_exact_duplicate_scan(sketch, settings, plan=None):
                 count = min(count, MAX_SVG_SPLINES_TO_ANALYZE)
 
             for i in range(count):
-                yield col.item(i)
+                curve = col.item(i)
+                if should_skip_fixed_geometry(curve, settings, plan):
+                    continue
+                yield curve
         except:
             pass
 
@@ -2948,6 +3034,8 @@ def line_like_items_for_plan(plan):
 
     if selected_curves is not None:
         for curve in selected_curves:
+            if should_skip_fixed_geometry(curve, settings, plan):
+                continue
             segment = line_like_segment_from_curve(curve, settings)
             if segment:
                 start, end, is_spline = segment
@@ -2962,6 +3050,8 @@ def line_like_items_for_plan(plan):
         lines_col = sc.sketchLines
         for i in range(lines_col.count):
             line = lines_col.item(i)
+            if should_skip_fixed_geometry(line, settings, plan):
+                continue
             segment = line_like_segment_from_curve(line, settings)
             if segment:
                 start, end, is_spline = segment
@@ -2983,6 +3073,9 @@ def line_like_items_for_plan(plan):
 
                     spline = col.item(i)
                     analyzed_svg_splines += 1
+
+                    if should_skip_fixed_geometry(spline, settings, plan):
+                        continue
 
                     segment = line_like_segment_from_curve(spline, settings)
                     if segment:
@@ -3106,6 +3199,7 @@ _INPUT_IDS = {
     "delete_exact": "deleteExact",
     "selected_only": "selectedOnly",
     "line_only_fast": "lineOnlyFast",
+    "ignore_fixed": "ignoreFixedGeometry",
     "merge_lines": "mergeLines",
     "merge_circular": "mergeCircular",
     "svg_splines": "svgSplinesAsLines",
@@ -3152,6 +3246,7 @@ def add_command_inputs(cmd):
     group_inputs.addBoolValueInput(_INPUT_IDS["delete_exact"], tr("delete_exact"), True, "", True)
     group_inputs.addBoolValueInput(_INPUT_IDS["selected_only"], tr("selected_only"), True, "", False)
     group_inputs.addBoolValueInput(_INPUT_IDS["line_only_fast"], tr("line_only_fast"), True, "", False)
+    group_inputs.addBoolValueInput(_INPUT_IDS["ignore_fixed"], tr("ignore_fixed"), True, "", True)
     group_inputs.addBoolValueInput(_INPUT_IDS["merge_lines"], tr("merge_lines"), True, "", True)
     group_inputs.addBoolValueInput(_INPUT_IDS["merge_circular"], tr("merge_circular"), True, "", False)
     group_inputs.addBoolValueInput(_INPUT_IDS["svg_splines"], tr("svg_splines"), True, "", False)
@@ -3233,6 +3328,7 @@ def read_settings_from_inputs(inputs):
     settings.delete_exact_duplicates = bool_value(_INPUT_IDS["delete_exact"], True)
     settings.selected_geometry_only = bool_value(_INPUT_IDS["selected_only"], False)
     settings.line_only_fast_mode = bool_value(_INPUT_IDS["line_only_fast"], False)
+    settings.ignore_fixed_geometry = bool_value(_INPUT_IDS["ignore_fixed"], True)
     settings.merge_partially_overlapping_lines = bool_value(_INPUT_IDS["merge_lines"], True)
     settings.merge_partially_overlapping_circular_curves = bool_value(_INPUT_IDS["merge_circular"], False)
     settings.treat_near_straight_splines_as_lines = bool_value(_INPUT_IDS["svg_splines"], False)
@@ -3249,6 +3345,34 @@ def read_settings_from_inputs(inputs):
             settings.tolerance_cm = DEFAULT_TOLERANCE_CM
 
     return settings
+
+
+
+def prepare_analysis_scope_from_selection(ui, sketch, settings):
+    """
+    Use selected sketch curves as analysis scope when available or requested.
+
+    This is the safest way to clean normal duplicated sketch geometry in a sketch
+    that also contains imported SVG geometry. Once SVG linework is imported into
+    the same Fusion sketch, SVG lines and manually drawn lines can both appear as
+    SketchLine, so automatic origin-based filtering is not reliable.
+    """
+    selected_curves = selected_curves_from_ui(ui, sketch, settings)
+
+    if selected_curves:
+        settings.selected_curves = selected_curves
+        settings.selected_geometry_only = True
+        settings.auto_selected_geometry_scope = True
+        return None
+
+    if getattr(settings, "selected_geometry_only", False):
+        settings.selected_curves = []
+        settings.auto_selected_geometry_scope = False
+        return tr("selected_none")
+
+    settings.selected_curves = None
+    settings.auto_selected_geometry_scope = False
+    return None
 
 
 # -----------------------------------------------------------------------------
@@ -3327,16 +3451,16 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
             settings = read_settings_from_inputs(inputs)
             delete_preview_sketch(sketch)
 
+            scope_error = prepare_analysis_scope_from_selection(ui, sketch, settings)
+            if scope_error:
+                _command_state.last_plan = None
+                if summary_box:
+                    set_textbox_text(summary_box, scope_error)
+                return
+
             if getattr(settings, "selected_geometry_only", False):
-                settings.selected_curves = selected_curves_from_ui(ui, sketch, settings)
-                if not settings.selected_curves:
-                    _command_state.last_plan = None
-                    if summary_box:
-                        set_textbox_text(summary_box, tr("selected_none"))
-                    return
                 guard = None
             else:
-                settings.selected_curves = None
                 guard = large_sketch_guard_message(sketch, settings)
 
             if guard:
@@ -3363,6 +3487,11 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
             if plan.has_changes():
                 summary = build_summary(plan, tr("test_completed_no_preview"))
                 summary += "\n\n" + tr("no_preview_note")
+                if getattr(settings, "auto_selected_geometry_scope", False):
+                    summary += "\n\n" + tr("auto_selection_note")
+                    summary += "\n" + tr("mixed_line_warning")
+                if getattr(settings, "ignore_fixed_geometry", True):
+                    summary += "\n\n" + tr("ignore_fixed_warning")
                 summary += "\nSelected curves: {} / {}".format(selected, len(affected_curves))
             else:
                 summary = build_summary(plan, tr("nothing_to_preview"))
@@ -3409,14 +3538,14 @@ class CommandExecuteHandler(adsk.core.CommandEventHandler):
             settings = read_settings_from_inputs(inputs)
             delete_preview_sketch(sketch)
 
+            scope_error = prepare_analysis_scope_from_selection(ui, sketch, settings)
+            if scope_error:
+                ui.messageBox(scope_error, ADDIN_NAME)
+                return
+
             if getattr(settings, "selected_geometry_only", False):
-                settings.selected_curves = selected_curves_from_ui(ui, sketch, settings)
-                if not settings.selected_curves:
-                    ui.messageBox(tr("selected_none"), ADDIN_NAME)
-                    return
                 guard = None
             else:
-                settings.selected_curves = None
                 guard = large_sketch_guard_message(sketch, settings)
 
             if guard:
