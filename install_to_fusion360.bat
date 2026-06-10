@@ -59,11 +59,11 @@ echo Copying add-in files only.
 echo From: %SOURCE_DIR%
 echo To  : %TARGET_DIR%
 echo.
-echo Installer/helper files will be excluded.
+echo Installer/helper files and the external SVG pre-cleaner will be excluded.
 echo.
 
 robocopy "%SOURCE_DIR%" "%TARGET_DIR%" /E ^
- /XF install_to_fusion360.bat uninstall_from_fusion360.bat INSTALL.md README_PACKAGE.md ^
+ /XF install_to_fusion360.bat uninstall_from_fusion360.bat INSTALL.md README_PACKAGE.md clean_svg.py SVG_PRE_CLEANER.md *_cleaned.svg ^
  /XD install .git __pycache__ .vscode .idea
 
 set "ROBOCOPY_EXIT=%ERRORLEVEL%"
@@ -82,7 +82,7 @@ echo.
 echo Installed add-in path:
 echo %TARGET_DIR%
 echo.
-echo The installer/helper files were not copied to Fusion 360.
+echo The installer/helper files and clean_svg.py were not copied to Fusion 360.
 echo.
 echo Restart Fusion 360, then open:
 echo Utilities ^> Scripts and Add-Ins ^> Add-Ins

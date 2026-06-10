@@ -1,4 +1,4 @@
-# Sketch Curve Cleaner v20.0.0 - Installation
+# Sketch Curve Cleaner v22.0.0 - Installation
 
 ## Package layout
 
@@ -62,3 +62,16 @@ or delete manually:
 ```text
 %APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\SketchCurveCleanerLocalizedAddIn
 ```
+
+
+## External helper files
+
+The source folder also contains:
+
+```text
+clean_svg.py
+SVG_PRE_CLEANER.md
+```
+
+These files are kept in the same directory as the add-in source, but they are not
+copied into the Fusion 360 AddIns folder by the installer.

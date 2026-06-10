@@ -2,7 +2,7 @@
 
 ## Version
 
-Current version: **20.0.0**
+Current version: **22.0.0**
 
 **Sketch Curve Cleaner** is an Autodesk Fusion 360 add-in that helps preview and clean duplicated or overlapping sketch curves.
 
@@ -86,7 +86,7 @@ The preview works by:
 1. deleting any previous temporary preview curves;
 2. analyzing the target sketch;
 3. selecting the source curves that would be deleted or replaced;
-4. drawing replacement curves as temporary construction geometry directly in the target sketch.
+4. updating the command summary without drawing temporary preview geometry.
 
 ## Cleanup options
 
@@ -622,14 +622,12 @@ In practice, those preview methods can be invisible or misleading depending on
 the Fusion 360 sketch editing context. Version 11 uses a more robust approach:
 
 - curves that would be deleted or replaced are selected in the active sketch;
-- replacement curves are created as temporary construction geometry directly in
-  the target sketch;
+- replacement curves are not drawn during Test in version 22;
 - these temporary curves are marked with an internal Fusion attribute;
 - they are automatically removed before a new **Test**, before **Apply**, on
   **Cancel**, and when the command closes.
 
-This preview does not provide red/green coloring, but it is designed to be
-visible and geometrically aligned with the actual sketch.
+Version 22 disables this preview mode to improve performance on dense SVG imports.
 
 
 ## Versioning
@@ -637,7 +635,7 @@ visible and geometrically aligned with the actual sketch.
 The add-in version is defined in the Python source:
 
 ```python
-ADDIN_VERSION = "20.0.0"
+ADDIN_VERSION = "22.0.0"
 ```
 
 The same version is also stored in the Fusion manifest file and displayed in the
@@ -673,6 +671,8 @@ to Fusion 360:
 install_to_fusion360.bat
 uninstall_from_fusion360.bat
 INSTALL.md
+clean_svg.py
+SVG_PRE_CLEANER.md
 ```
 
 The final Fusion 360 installation path is:
@@ -755,3 +755,111 @@ If the guard blocks the test, recommended actions are:
 Also, when SVG spline mode is disabled, exact duplicate scanning no longer
 materializes all spline entities. This prevents a common slow path on dense SVG
 imports.
+
+
+## Version 21: faster SVG workflow
+
+Version 21 adds two complementary performance improvements.
+
+### 1. Fusion add-in fast modes
+
+The Fusion command now includes:
+
+```text
+Selected geometry only
+Line-only fast mode for SVG imports
+```
+
+Use **Selected geometry only** when the imported SVG sketch is too dense. Select a
+small group of curves in the sketch, then run **Test**. The add-in will analyze
+only the selected curves instead of scanning the whole sketch.
+
+Use **Line-only fast mode for SVG imports** when you mainly want to clean
+straight SVG/DXF linework. In this mode, the add-in focuses on line-like geometry
+and skips slower circular/spline-wide analysis.
+
+Recommended SVG workflow inside Fusion:
+
+```text
+1. Select a small zone of the imported SVG sketch.
+2. Enable "Selected geometry only".
+3. Enable "Line-only fast mode for SVG imports".
+4. Keep "Treat near-straight SVG/imported splines as lines" disabled at first.
+5. Click Test.
+6. Enable SVG spline mode only on a small selected area if needed.
+```
+
+### 2. External SVG pre-cleaner in the same directory
+
+The package now includes an external Python helper in the same directory as the
+add-in:
+
+```text
+SketchCurveCleanerLocalizedAddIn/clean_svg.py
+```
+
+It is documented in:
+
+```text
+SketchCurveCleanerLocalizedAddIn/SVG_PRE_CLEANER.md
+```
+
+Basic usage:
+
+```bash
+python clean_svg.py input.svg
+```
+
+This creates:
+
+```text
+input_cleaned.svg
+```
+
+The pre-cleaner works before Fusion import. This is usually much faster than
+cleaning thousands of SVG-generated sketch curves through the Fusion API.
+
+The installer excludes this helper from the Fusion 360 AddIns folder. It remains
+a source/repository tool, not a Fusion runtime file.
+
+
+## Version 22: preview geometry disabled
+
+Version 22 removes temporary preview geometry from the **Test** workflow.
+
+Earlier versions created construction curves in the active sketch to show the
+replacement result. On dense imported SVG sketches, this could be very expensive
+because Fusion had to create many temporary sketch curves, recompute the sketch,
+refresh the display, and later delete those curves.
+
+In version 22, **Test** does only this:
+
+```text
+1. removes old temporary preview artifacts from previous versions;
+2. analyzes the sketch or selected geometry;
+3. selects a limited sample of affected source curves;
+4. updates the command summary.
+```
+
+It does **not** create replacement preview curves anymore.
+
+This should improve responsiveness, especially for imported SVG sketches.
+
+Recommended workflow for dense SVG imports:
+
+```text
+1. Use clean_svg.py before importing when possible.
+2. In Fusion, enable "Selected geometry only".
+3. Enable "Line-only fast mode for SVG imports".
+4. Keep SVG spline analysis disabled at first.
+5. Click Test.
+6. Read the summary.
+7. Apply only on small, controlled selections.
+```
+
+Trade-off:
+
+```text
+The Test command is faster and safer, but it no longer draws the replacement
+geometry before Apply.
+```

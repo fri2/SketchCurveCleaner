@@ -53,7 +53,7 @@ import adsk.fusion
 # -----------------------------------------------------------------------------
 
 ADDIN_NAME = "Sketch Curve Cleaner"
-ADDIN_VERSION = "20.0.0"
+ADDIN_VERSION = "22.0.0"
 ADDIN_AUTHOR = "RICHARD Francois"
 ADDIN_LICENSE = "GPL-3.0-only"
 ADDIN_COPYRIGHT = "Copyright (C) 2026 RICHARD Francois"
@@ -70,6 +70,8 @@ MAX_SVG_SPLINES_TO_ANALYZE = 300
 MAX_SPLINE_DEFINITION_POINTS = 24
 MAX_PREVIEW_REPLACEMENT_CURVES = 300
 MAX_PREVIEW_SELECTIONS = 300
+# Version 22: Test no longer creates temporary preview geometry.
+PREVIEW_GEOMETRY_ENABLED = False
 # Hard fail-fast limits used before any expensive Fusion API iteration.
 MAX_SAFE_TOTAL_CURVES = 1200
 MAX_SAFE_LINES = 1000
@@ -119,6 +121,9 @@ _STRINGS = {
             "Temporary preview geometry is created for merged replacement curves."
         ),
         "settings_group": "Cleanup options",
+        "selected_only": "Selected geometry only",
+        "line_only_fast": "Line-only fast mode for SVG imports",
+        "selected_none": "Selected geometry only is enabled, but no supported sketch curves are selected. Select a few curves in the target sketch, then click Test again.",
         "delete_exact": "Delete exact duplicate curves",
         "merge_lines": "Split/merge partially overlapping straight lines",
         "svg_splines": "Treat near-straight SVG/imported splines as lines (slower)",
@@ -150,6 +155,9 @@ _STRINGS = {
         "result_svg_skipped": "Imported splines skipped by performance limit",
         "result_preview_limited": "Preview geometry skipped by performance limit",
         "result_selection_limited": "Selection limited for performance",
+        "result_selected_only": "Selected geometry only",
+        "result_selected_count": "Selected curves used for analysis",
+        "result_line_only_fast": "Line-only fast mode",
         "result_circular_groups": "Overlapping circular curve groups",
         "result_circular_delete": "Circular curves to replace",
         "result_circular_create": "Merged circular curves to create",
@@ -191,6 +199,9 @@ _STRINGS = {
             "Une prévisualisation temporaire est créée pour afficher les courbes fusionnées."
         ),
         "settings_group": "Options de nettoyage",
+        "selected_only": "Géométrie sélectionnée uniquement",
+        "line_only_fast": "Mode rapide lignes seulement pour imports SVG",
+        "selected_none": "L’option géométrie sélectionnée uniquement est activée, mais aucune courbe d’esquisse prise en charge n’est sélectionnée. Sélectionnez quelques courbes dans l’esquisse cible, puis cliquez à nouveau sur Test.",
         "delete_exact": "Supprimer les courbes exactement dupliquées",
         "merge_lines": "Découper/fusionner les lignes droites partiellement superposées",
         "svg_splines": "Traiter les splines SVG/importées quasi droites comme des lignes (plus lent)",
@@ -222,6 +233,9 @@ _STRINGS = {
         "result_svg_skipped": "Splines importées ignorées par limite de performance",
         "result_preview_limited": "Prévisualisation géométrique ignorée par limite de performance",
         "result_selection_limited": "Sélection limitée pour les performances",
+        "result_selected_only": "Géométrie sélectionnée uniquement",
+        "result_selected_count": "Courbes sélectionnées utilisées pour l’analyse",
+        "result_line_only_fast": "Mode rapide lignes seulement",
         "result_circular_groups": "Groupes de courbes circulaires superposées",
         "result_circular_delete": "Courbes circulaires à remplacer",
         "result_circular_create": "Courbes circulaires fusionnées à créer",
@@ -338,6 +352,9 @@ class CleanupSettings:
         self.merge_partially_overlapping_circular_curves = False
         self.treat_near_straight_splines_as_lines = False
         self.allow_large_sketch_analysis = False
+        self.selected_geometry_only = False
+        self.selected_curves = None
+        self.line_only_fast_mode = False
         self.allow_reference_geometry = False
         self.allow_constrained_or_dimensioned = False
         self.merge_construction_and_normal = False
@@ -2646,6 +2663,10 @@ def build_summary(plan, title=None):
 
     lines.append("{}: {}".format(tr("version_label"), ADDIN_VERSION))
     lines.append("{}: {}".format(tr("result_sketch"), plan.sketch.name))
+    lines.append("{}: {}".format(tr("result_selected_only"), "yes" if getattr(plan.settings, "selected_geometry_only", False) else "no"))
+    lines.append("{}: {}".format(tr("result_line_only_fast"), "yes" if getattr(plan.settings, "line_only_fast_mode", False) else "no"))
+    if getattr(plan.settings, "selected_curves", None) is not None:
+        lines.append("{}: {}".format(tr("result_selected_count"), len(plan.settings.selected_curves)))
     lines.append("{}: {} cm".format(tr("result_tolerance"), plan.settings.tolerance_cm))
     lines.append("")
     lines.append("{}: {}".format(tr("result_exact"), len(plan.exact_duplicates_to_delete)))
@@ -2705,6 +2726,310 @@ def set_textbox_text(textbox, text):
             pass
 
 
+
+# -----------------------------------------------------------------------------
+# Version 21 performance helpers: selected-only and line-only fast mode
+# -----------------------------------------------------------------------------
+
+def is_supported_selected_curve(entity):
+    """Return True when a selected Fusion entity is a supported sketch curve."""
+    try:
+        ot = entity.objectType
+    except:
+        return False
+
+    class_names = [
+        "SketchLine",
+        "SketchArc",
+        "SketchCircle",
+        "SketchEllipse",
+        "SketchEllipticalArc",
+        "SketchFittedSpline",
+        "SketchControlPointSpline",
+    ]
+
+    for name in class_names:
+        try:
+            if ot == getattr(adsk.fusion, name).classType():
+                return True
+        except:
+            pass
+
+    return False
+
+
+def selected_curves_from_ui(ui, sketch, settings):
+    """Collect selected sketch curves for selected-only analysis."""
+    result = []
+    seen = set()
+
+    try:
+        selections = ui.activeSelections
+        count = selections.count
+    except:
+        return result
+
+    for i in range(count):
+        try:
+            entity = selections.item(i).entity
+        except:
+            continue
+
+        if not is_supported_selected_curve(entity):
+            continue
+
+        try:
+            parent_sketch = entity.parentSketch
+            if parent_sketch and parent_sketch != sketch:
+                continue
+        except:
+            pass
+
+        if getattr(settings, "line_only_fast_mode", False):
+            if line_like_segment_from_curve(entity, settings) is None:
+                continue
+
+        try:
+            key = entity.entityToken
+        except:
+            key = id(entity)
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        result.append(entity)
+
+    return result
+
+
+def is_line_only_fast_curve(curve, settings):
+    """Check whether a curve can participate in line-only fast mode."""
+    try:
+        return line_like_segment_from_curve(curve, settings) is not None
+    except:
+        return False
+
+
+def curves_for_exact_duplicate_scan(sketch, settings, plan=None):
+    """
+    Yield curves for exact duplicate detection using v21 performance rules.
+
+    Selected-only mode never scans the whole sketch. Line-only fast mode scans
+    only SketchLine entities, plus near-straight splines when the SVG spline
+    option is explicitly enabled.
+    """
+    selected_curves = getattr(settings, "selected_curves", None)
+    if selected_curves is not None:
+        for curve in selected_curves:
+            if getattr(settings, "line_only_fast_mode", False) and not is_line_only_fast_curve(curve, settings):
+                continue
+            yield curve
+        return
+
+    sc = sketch.sketchCurves
+
+    if getattr(settings, "line_only_fast_mode", False):
+        collections = ["sketchLines"]
+
+        if getattr(settings, "treat_near_straight_splines_as_lines", False):
+            collections.extend(["sketchFittedSplines", "sketchControlPointSplines"])
+        else:
+            try:
+                if plan:
+                    plan.unsupported_skipped += (
+                        safe_collection_count(sc, "sketchFittedSplines")
+                        + safe_collection_count(sc, "sketchControlPointSplines")
+                        + safe_collection_count(sc, "sketchArcs")
+                        + safe_collection_count(sc, "sketchCircles")
+                        + safe_collection_count(sc, "sketchEllipses")
+                        + safe_collection_count(sc, "sketchEllipticalArcs")
+                    )
+            except:
+                pass
+    else:
+        collections = [
+            "sketchLines",
+            "sketchArcs",
+            "sketchCircles",
+            "sketchEllipses",
+            "sketchEllipticalArcs",
+        ]
+
+        if getattr(settings, "treat_near_straight_splines_as_lines", False):
+            collections.extend(["sketchFittedSplines", "sketchControlPointSplines"])
+        else:
+            try:
+                if plan:
+                    plan.unsupported_skipped += (
+                        safe_collection_count(sc, "sketchFittedSplines")
+                        + safe_collection_count(sc, "sketchControlPointSplines")
+                    )
+            except:
+                pass
+
+    for name in collections:
+        try:
+            col = getattr(sc, name)
+            count = col.count
+
+            if name in ("sketchFittedSplines", "sketchControlPointSplines"):
+                count = min(count, MAX_SVG_SPLINES_TO_ANALYZE)
+
+            for i in range(count):
+                yield col.item(i)
+        except:
+            pass
+
+
+def line_like_items_for_plan(plan):
+    """Build the line-like curve list used by line merge planning."""
+    items = []
+    settings = plan.settings
+    selected_curves = getattr(settings, "selected_curves", None)
+
+    if selected_curves is not None:
+        for curve in selected_curves:
+            segment = line_like_segment_from_curve(curve, settings)
+            if segment:
+                start, end, is_spline = segment
+                items.append((curve, start, end, is_spline))
+                if is_spline:
+                    plan.svg_straight_spline_candidates += 1
+        return items
+
+    sc = plan.sketch.sketchCurves
+
+    try:
+        lines_col = sc.sketchLines
+        for i in range(lines_col.count):
+            line = lines_col.item(i)
+            segment = line_like_segment_from_curve(line, settings)
+            if segment:
+                start, end, is_spline = segment
+                items.append((line, start, end, is_spline))
+    except:
+        pass
+
+    if getattr(settings, "treat_near_straight_splines_as_lines", False):
+        analyzed_svg_splines = 0
+        for collection_name in ("sketchFittedSplines", "sketchControlPointSplines"):
+            try:
+                col = getattr(sc, collection_name)
+                count = col.count
+
+                for i in range(count):
+                    if analyzed_svg_splines >= MAX_SVG_SPLINES_TO_ANALYZE:
+                        plan.svg_spline_candidates_skipped += max(0, count - i)
+                        break
+
+                    spline = col.item(i)
+                    analyzed_svg_splines += 1
+
+                    segment = line_like_segment_from_curve(spline, settings)
+                    if segment:
+                        start, end, is_spline = segment
+                        items.append((spline, start, end, is_spline))
+                        plan.svg_straight_spline_candidates += 1
+            except:
+                pass
+
+    return items
+
+
+def plan_line_merges(plan):
+    """Find partially overlapping line-like curves using v21 performance rules."""
+    if not plan.settings.merge_partially_overlapping_lines:
+        return
+
+    groups = {}
+
+    for line, p1, p2, is_spline in line_like_items_for_plan(plan):
+        if not is_deletable_candidate(line, plan.settings, plan):
+            continue
+
+        key = line_like_group_key(line, p1, p2, plan.settings)
+        if key is None:
+            continue
+
+        _construction, ux_q, uy_q, offset_q = key
+
+        ux = ux_q * tol(plan.settings)
+        uy = uy_q * tol(plan.settings)
+        offset = offset_q * tol(plan.settings)
+
+        length = math.sqrt(ux * ux + uy * uy)
+        if length <= tol(plan.settings):
+            continue
+
+        ux /= length
+        uy /= length
+
+        t1 = projection_on_line(p1, ux, uy)
+        t2 = projection_on_line(p2, ux, uy)
+
+        if t2 < t1:
+            t1, t2 = t2, t1
+
+        groups.setdefault(key, []).append((t1, t2, line))
+
+    for key, intervals in groups.items():
+        if len(intervals) < 2:
+            continue
+
+        source_curves = [item[2] for item in intervals]
+
+        if group_has_constraints_or_dimensions(source_curves) and not plan.settings.allow_constrained_or_dimensioned:
+            plan.constrained_groups_skipped += 1
+            continue
+
+        merged = merge_linear_intervals(intervals, plan.settings)
+
+        if len(merged) >= len(intervals):
+            continue
+
+        _construction, ux_q, uy_q, offset_q = key
+        ux = ux_q * tol(plan.settings)
+        uy = uy_q * tol(plan.settings)
+        offset = offset_q * tol(plan.settings)
+
+        length = math.sqrt(ux * ux + uy * uy)
+        if length <= tol(plan.settings):
+            continue
+
+        ux /= length
+        uy /= length
+
+        result_curves = []
+        for start_t, end_t, merged_sources in merged:
+            start_pt = point_from_line_projection(start_t, offset, ux, uy)
+            end_pt = point_from_line_projection(end_t, offset, ux, uy)
+
+            result_curves.append({
+                "type": "line",
+                "start": start_pt,
+                "end": end_pt,
+                "isConstruction": resulting_construction_state(merged_sources),
+            })
+
+        plan.line_merge_groups.append({
+            "source_curves": source_curves,
+            "result_curves": result_curves,
+        })
+
+
+def build_cleanup_plan(sketch, settings):
+    """Analyze a sketch and build a cleanup plan using v21 performance options."""
+    plan = CleanupPlan(sketch, settings)
+    plan_exact_duplicate_removal(plan)
+    plan_line_merges(plan)
+
+    if not getattr(settings, "line_only_fast_mode", False):
+        plan_circular_merges(plan)
+
+    return plan
+
+
 # -----------------------------------------------------------------------------
 # Command input helpers
 # -----------------------------------------------------------------------------
@@ -2713,6 +3038,8 @@ _INPUT_IDS = {
     "intro": "introText",
     "settings_group": "settingsGroup",
     "delete_exact": "deleteExact",
+    "selected_only": "selectedOnly",
+    "line_only_fast": "lineOnlyFast",
     "merge_lines": "mergeLines",
     "merge_circular": "mergeCircular",
     "svg_splines": "svgSplinesAsLines",
@@ -2757,6 +3084,8 @@ def add_command_inputs(cmd):
     group_inputs = group.children
 
     group_inputs.addBoolValueInput(_INPUT_IDS["delete_exact"], tr("delete_exact"), True, "", True)
+    group_inputs.addBoolValueInput(_INPUT_IDS["selected_only"], tr("selected_only"), True, "", False)
+    group_inputs.addBoolValueInput(_INPUT_IDS["line_only_fast"], tr("line_only_fast"), True, "", False)
     group_inputs.addBoolValueInput(_INPUT_IDS["merge_lines"], tr("merge_lines"), True, "", True)
     group_inputs.addBoolValueInput(_INPUT_IDS["merge_circular"], tr("merge_circular"), True, "", False)
     group_inputs.addBoolValueInput(_INPUT_IDS["svg_splines"], tr("svg_splines"), True, "", False)
@@ -2836,6 +3165,8 @@ def read_settings_from_inputs(inputs):
             return default
 
     settings.delete_exact_duplicates = bool_value(_INPUT_IDS["delete_exact"], True)
+    settings.selected_geometry_only = bool_value(_INPUT_IDS["selected_only"], False)
+    settings.line_only_fast_mode = bool_value(_INPUT_IDS["line_only_fast"], False)
     settings.merge_partially_overlapping_lines = bool_value(_INPUT_IDS["merge_lines"], True)
     settings.merge_partially_overlapping_circular_curves = bool_value(_INPUT_IDS["merge_circular"], False)
     settings.treat_near_straight_splines_as_lines = bool_value(_INPUT_IDS["svg_splines"], False)
@@ -2930,7 +3261,18 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
             settings = read_settings_from_inputs(inputs)
             delete_preview_sketch(sketch)
 
-            guard = large_sketch_guard_message(sketch, settings)
+            if getattr(settings, "selected_geometry_only", False):
+                settings.selected_curves = selected_curves_from_ui(ui, sketch, settings)
+                if not settings.selected_curves:
+                    _command_state.last_plan = None
+                    if summary_box:
+                        set_textbox_text(summary_box, tr("selected_none"))
+                    return
+                guard = None
+            else:
+                settings.selected_curves = None
+                guard = large_sketch_guard_message(sketch, settings)
+
             if guard:
                 _command_state.last_plan = None
                 try:
@@ -2948,18 +3290,13 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
             selected = select_curves_for_preview(ui, affected_curves)
             plan.selection_limited = len(affected_curves) > selected
 
-            preview_sketch = None
-            replacement_count = preview_replacement_curve_count(plan)
-
-            if replacement_count <= MAX_PREVIEW_REPLACEMENT_CURVES:
-                preview_sketch = create_preview_sketch(plan)
-            else:
-                plan.preview_geometry_limited = True
+            # Version 22: no temporary preview geometry is created during Test.
+            # This avoids expensive sketch-curve creation/recompute on dense SVG imports.
+            plan.preview_geometry_limited = False
 
             if plan.has_changes():
-                title = tr("preview_created") if preview_sketch else tr("preview_failed")
-                summary = build_summary(plan, title)
-                summary += "\n\n" + tr("preview_note")
+                summary = build_summary(plan, tr("test_completed_no_preview"))
+                summary += "\n\n" + tr("no_preview_note")
                 summary += "\nSelected curves: {} / {}".format(selected, len(affected_curves))
             else:
                 summary = build_summary(plan, tr("nothing_to_preview"))
@@ -3006,7 +3343,16 @@ class CommandExecuteHandler(adsk.core.CommandEventHandler):
             settings = read_settings_from_inputs(inputs)
             delete_preview_sketch(sketch)
 
-            guard = large_sketch_guard_message(sketch, settings)
+            if getattr(settings, "selected_geometry_only", False):
+                settings.selected_curves = selected_curves_from_ui(ui, sketch, settings)
+                if not settings.selected_curves:
+                    ui.messageBox(tr("selected_none"), ADDIN_NAME)
+                    return
+                guard = None
+            else:
+                settings.selected_curves = None
+                guard = large_sketch_guard_message(sketch, settings)
+
             if guard:
                 ui.messageBox(guard, ADDIN_NAME)
                 return
