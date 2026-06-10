@@ -2,7 +2,7 @@
 
 ## Version
 
-Current version: **12.0.0**
+Current version: **15.0.0**
 
 **Sketch Curve Cleaner** is an Autodesk Fusion 360 add-in that helps preview and clean duplicated or overlapping sketch curves.
 
@@ -107,13 +107,40 @@ Be careful when enabling the following options:
 
 These options can affect design intent, projected associativity, constraints, or dimensions. Test on a copy of the design first.
 
+
+## Correct Fusion 360 installation path on Windows
+
+The correct Windows installation path for this add-in is:
+
+```text
+%APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\SketchCurveCleanerLocalizedAddIn
+```
+
+In other words, the complete add-in folder must be named:
+
+```text
+SketchCurveCleanerLocalizedAddIn
+```
+
+and placed inside:
+
+```text
+%APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns
+```
+
+Do not use the older/wrong path:
+
+```text
+%APPDATA%\Autodesk\Autodesk Fusion\API\AddIns
+```
+
 ## Installation on Windows
 
 1. Close Fusion 360.
 2. Copy the full folder `SketchCurveCleanerLocalizedAddIn` to:
 
    ```text
-   %appdata%\Autodesk\Autodesk Fusion\API\AddIns
+   %APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns
    ```
 
 3. Start Fusion 360.
@@ -262,9 +289,46 @@ visible and geometrically aligned with the actual sketch.
 The add-in version is defined in the Python source:
 
 ```python
-ADDIN_VERSION = "12.0.0"
+ADDIN_VERSION = "15.0.0"
 ```
 
 The same version is also stored in the Fusion manifest file and displayed in the
 Fusion 360 command dialog. This makes it easier to check which installed version
 is currently running.
+
+
+
+
+## Installation helper files
+
+This repository/package keeps the installation helper files directly inside the
+`SketchCurveCleanerLocalizedAddIn` folder:
+
+```text
+SketchCurveCleanerLocalizedAddIn/
+├── SketchCurveCleanerLocalizedAddIn.py
+├── SketchCurveCleanerLocalizedAddIn.manifest
+├── README.md
+├── LICENSE
+├── .gitignore
+├── install_to_fusion360.bat
+├── uninstall_from_fusion360.bat
+└── INSTALL.md
+```
+
+The installer copies only the real Fusion 360 add-in files.
+
+The following helper files are **excluded** during installation and are not copied
+to Fusion 360:
+
+```text
+install_to_fusion360.bat
+uninstall_from_fusion360.bat
+INSTALL.md
+```
+
+The final Fusion 360 installation path is:
+
+```text
+%APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\SketchCurveCleanerLocalizedAddIn
+```
