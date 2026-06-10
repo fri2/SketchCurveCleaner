@@ -52,7 +52,7 @@ import adsk.fusion
 # -----------------------------------------------------------------------------
 
 ADDIN_NAME = "Sketch Curve Cleaner"
-ADDIN_VERSION = "15.0.0"
+ADDIN_VERSION = "16.0.0"
 ADDIN_AUTHOR = "RICHARD Francois"
 ADDIN_LICENSE = "GPL-3.0-only"
 ADDIN_COPYRIGHT = "Copyright (C) 2026 RICHARD Francois"
