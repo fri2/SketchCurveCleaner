@@ -4,9 +4,9 @@
     "id": "b15b7d7a-696f-4ea6-896b-d0c9ef5e98fa",
     "author": "RICHARD Francois",
     "description": {
-        "": "Sketch Curve Cleaner v25.0.0: adds an option to ignore green/fixed geometry, useful for sketches mixing imported SVG linework and normal blue sketch entities."
+        "": "Sketch Curve Cleaner v29.0.0: fixes missing summary count helper functions and keeps editable limits collapsed by default."
     },
-    "version": "25.0.0",
+    "version": "29.0.0",
     "runOnStartup": true,
     "supportedOS": "windows|mac",
     "editEnabled": true,

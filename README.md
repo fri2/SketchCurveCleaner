@@ -2,7 +2,7 @@
 
 ## Version
 
-Current version: **25.0.0**
+Current version: **29.0.0**
 
 **Sketch Curve Cleaner** is an Autodesk Fusion 360 add-in that helps preview and clean duplicated or overlapping sketch curves.
 
@@ -635,7 +635,7 @@ Version 22 disables this preview mode to improve performance on dense SVG import
 The add-in version is defined in the Python source:
 
 ```python
-ADDIN_VERSION = "25.0.0"
+ADDIN_VERSION = "29.0.0"
 ```
 
 The same version is also stored in the Fusion manifest file and displayed in the
@@ -1009,3 +1009,129 @@ Recommended workflow for mixed SVG sketches:
 
 If you want to clean the imported SVG itself, disable this option or work on a
 separate selected copy of the SVG geometry.
+
+
+## Version 26: editable safety limits in the Fusion interface
+
+Version 26 adds a new collapsed section in the Fusion command dialog:
+
+```text
+Performance / safety limits
+```
+
+The following limits can now be modified directly in the interface:
+
+```text
+Max active curves before blocking
+Max lines before blocking
+Max active SVG/splines before blocking
+Max SVG splines to analyze
+Max curves selected by Test
+```
+
+Default values remain conservative:
+
+```text
+Max active curves before blocking       = 1200
+Max lines before blocking               = 1000
+Max active SVG/splines before blocking  = 150
+Max SVG splines to analyze              = 300
+Max curves selected by Test             = 300
+```
+
+Use this when you know a sketch is safe to analyze but it is blocked by the
+default guardrails.
+
+Recommended approach:
+
+```text
+1. Increase limits gradually.
+2. Prefer "Selected geometry only" for dense SVG sketches.
+3. Keep "Ignore green / fixed geometry" enabled when SVG imports are green.
+4. Avoid setting very high values on a full dense SVG sketch.
+```
+
+Warning:
+
+```text
+Raising these limits can make Fusion slow or unresponsive on dense SVG sketches.
+```
+
+
+## Version 27: get_target_sketch hotfix
+
+Version 27 fixes a blocking Test error introduced in a previous package:
+
+```text
+NameError: name 'get_target_sketch' is not defined
+```
+
+The command now explicitly includes `get_target_sketch()` again.
+
+Target sketch selection priority:
+
+```text
+1. active sketch currently being edited;
+2. parent sketch of selected sketch curves;
+3. selected Sketch object;
+4. first sketch in the active root component as a fallback.
+```
+
+Recommended use remains:
+
+```text
+- edit the sketch before running the command; or
+- select sketch curves from the sketch you want to clean before clicking Test.
+```
+
+
+## Version 28: visible editable limits
+
+Version 28 makes the editable performance limits easier to find.
+
+In version 26/27, the limits were inside a collapsed group, so they could be
+missed in the Fusion command dialog.
+
+New behavior:
+
+```text
+- the limits group is expanded by default;
+- the group title is now "Visible performance / safety limits";
+- an explanatory text is shown above the numeric fields;
+- labels are shorter so Fusion is less likely to truncate them.
+```
+
+The editable fields are:
+
+```text
+Limit - active curves
+Limit - lines
+Limit - SVG/splines
+Limit - SVG splines scanned
+Limit - Test selection
+```
+
+If you still do not see them, scroll down in the command dialog: Fusion may place
+the limits below the main cleanup options depending on window height.
+
+
+## Version 29: summary counter hotfix and limits group closed
+
+Version 29 fixes a blocking Test error:
+
+```text
+NameError: name 'line_count_to_delete' is not defined
+```
+
+The summary helper functions are explicitly restored:
+
+```text
+line_count_to_delete
+line_count_to_create
+circular_count_to_delete
+circular_count_to_create
+```
+
+The performance/safety limits group is also closed by default again. The editable
+limits remain available in the interface; expand the group when you need to
+change them.

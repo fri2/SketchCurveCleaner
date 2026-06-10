@@ -53,7 +53,7 @@ import adsk.fusion
 # -----------------------------------------------------------------------------
 
 ADDIN_NAME = "Sketch Curve Cleaner"
-ADDIN_VERSION = "25.0.0"
+ADDIN_VERSION = "29.0.0"
 ADDIN_AUTHOR = "RICHARD Francois"
 ADDIN_LICENSE = "GPL-3.0-only"
 ADDIN_COPYRIGHT = "Copyright (C) 2026 RICHARD Francois"
@@ -121,6 +121,14 @@ _STRINGS = {
             "Temporary preview geometry is created for merged replacement curves."
         ),
         "settings_group": "Cleanup options",
+        "limits_group": "Performance / safety limits",
+        "limit_total_curves": "Limit - active curves",
+        "limit_lines": "Limit - lines",
+        "limit_splines": "Limit - SVG/splines",
+        "limit_svg_scan": "Limit - SVG splines scanned",
+        "limit_selection": "Limit - Test selection",
+        "limits_warning": "Raising these limits can make Fusion slow or unresponsive on dense SVG sketches. Increase them gradually.",
+        "limits_intro": "The numeric fields below are editable. Use them to raise or lower the safety thresholds used by Test.",
         "selected_only": "Selected geometry only",
         "line_only_fast": "Line-only fast mode for SVG imports",
         "ignore_fixed": "Ignore green / fixed geometry",
@@ -168,6 +176,11 @@ _STRINGS = {
         "result_line_only_fast": "Line-only fast mode",
         "result_ignore_fixed": "Ignore fixed/green geometry",
         "result_fixed_skipped": "Fixed/green curves skipped",
+        "result_limit_total": "Limit: active curves",
+        "result_limit_lines": "Limit: lines",
+        "result_limit_splines": "Limit: active splines",
+        "result_limit_svg_scan": "Limit: SVG splines scanned",
+        "result_limit_selection": "Limit: selected curves",
         "result_circular_groups": "Overlapping circular curve groups",
         "result_circular_delete": "Circular curves to replace",
         "result_circular_create": "Merged circular curves to create",
@@ -209,6 +222,14 @@ _STRINGS = {
             "Une prévisualisation temporaire est créée pour afficher les courbes fusionnées."
         ),
         "settings_group": "Options de nettoyage",
+        "limits_group": "Limites de performance / sécurité",
+        "limit_total_curves": "Limite - courbes actives",
+        "limit_lines": "Limite - lignes",
+        "limit_splines": "Limite - SVG/splines",
+        "limit_svg_scan": "Limite - splines SVG scannées",
+        "limit_selection": "Limite - sélection Test",
+        "limits_warning": "Augmenter ces limites peut rendre Fusion lent ou non réactif sur des SVG denses. Augmentez-les progressivement.",
+        "limits_intro": "Les champs numériques ci-dessous sont modifiables. Utilisez-les pour augmenter ou réduire les seuils de sécurité utilisés par Test.",
         "selected_only": "Géométrie sélectionnée uniquement",
         "line_only_fast": "Mode rapide lignes seulement pour imports SVG",
         "ignore_fixed": "Ignorer la géométrie verte / fixée",
@@ -256,6 +277,11 @@ _STRINGS = {
         "result_line_only_fast": "Mode rapide lignes seulement",
         "result_ignore_fixed": "Ignorer la géométrie fixée/verte",
         "result_fixed_skipped": "Courbes fixées/vertes ignorées",
+        "result_limit_total": "Limite : courbes actives",
+        "result_limit_lines": "Limite : lignes",
+        "result_limit_splines": "Limite : splines actives",
+        "result_limit_svg_scan": "Limite : splines SVG scannées",
+        "result_limit_selection": "Limite : courbes sélectionnées",
         "result_circular_groups": "Groupes de courbes circulaires superposées",
         "result_circular_delete": "Courbes circulaires à remplacer",
         "result_circular_create": "Courbes circulaires fusionnées à créer",
@@ -377,6 +403,11 @@ class CleanupSettings:
         self.auto_selected_geometry_scope = False
         self.line_only_fast_mode = False
         self.ignore_fixed_geometry = True
+        self.max_safe_total_curves = MAX_SAFE_TOTAL_CURVES
+        self.max_safe_lines = MAX_SAFE_LINES
+        self.max_safe_splines = MAX_SAFE_SPLINES
+        self.max_svg_splines_to_analyze = MAX_SVG_SPLINES_TO_ANALYZE
+        self.max_preview_selections = MAX_PREVIEW_SELECTIONS
         self.allow_reference_geometry = False
         self.allow_constrained_or_dimensioned = False
         self.merge_construction_and_normal = False
@@ -1662,7 +1693,7 @@ def plan_line_merges(plan):
                 count = col.count
 
                 for i in range(count):
-                    if analyzed_svg_splines >= MAX_SVG_SPLINES_TO_ANALYZE:
+                    if analyzed_svg_splines >= getattr(settings, "max_svg_splines_to_analyze", MAX_SVG_SPLINES_TO_ANALYZE):
                         plan.svg_spline_candidates_skipped += max(0, count - i)
                         break
 
@@ -2256,19 +2287,19 @@ def large_sketch_guard_message(sketch, settings):
 
     reasons = []
 
-    if active_count > MAX_SAFE_TOTAL_CURVES:
+    if active_count > getattr(settings, "max_safe_total_curves", MAX_SAFE_TOTAL_CURVES):
         reasons.append(
-            "active analyzable curves {} > safe limit {}".format(active_count, MAX_SAFE_TOTAL_CURVES)
+            "active analyzable curves {} > safe limit {}".format(active_count, getattr(settings, "max_safe_total_curves", MAX_SAFE_TOTAL_CURVES))
         )
 
-    if counts["lines"] > MAX_SAFE_LINES:
+    if counts["lines"] > getattr(settings, "max_safe_lines", MAX_SAFE_LINES):
         reasons.append(
-            "lines {} > safe limit {}".format(counts["lines"], MAX_SAFE_LINES)
+            "lines {} > safe limit {}".format(counts["lines"], getattr(settings, "max_safe_lines", MAX_SAFE_LINES))
         )
 
-    if getattr(settings, "treat_near_straight_splines_as_lines", False) and counts["splines"] > MAX_SAFE_SPLINES:
+    if getattr(settings, "treat_near_straight_splines_as_lines", False) and counts["splines"] > getattr(settings, "max_safe_splines", MAX_SAFE_SPLINES):
         reasons.append(
-            "active splines {} > safe limit {}".format(counts["splines"], MAX_SAFE_SPLINES)
+            "active splines {} > safe limit {}".format(counts["splines"], getattr(settings, "max_safe_splines", MAX_SAFE_SPLINES))
         )
 
     if not reasons:
@@ -2571,14 +2602,9 @@ def create_preview_sketch(plan):
 
 def select_curves_for_preview(ui, curves):
     """
-    Select curves that would be deleted or replaced.
-    
-        Parameters:
-            ui (adsk.core.UserInterface): Fusion user interface object.
-            curves (list): Fusion sketch curves to select.
-    
-        Returns:
-            int: Number of curves successfully selected.
+    Select a limited sample of affected source curves after Test.
+
+    Version 26 uses the editable "Max curves selected by Test" limit.
     """
     try:
         ui.activeSelections.clear()
@@ -2586,8 +2612,16 @@ def select_curves_for_preview(ui, curves):
         pass
 
     selected = 0
+    limit = MAX_PREVIEW_SELECTIONS
+
+    try:
+        if _command_state.last_plan:
+            limit = getattr(_command_state.last_plan.settings, "max_preview_selections", MAX_PREVIEW_SELECTIONS)
+    except:
+        pass
+
     for curve in curves:
-        if selected >= MAX_PREVIEW_SELECTIONS:
+        if selected >= limit:
             break
 
         try:
@@ -2600,104 +2634,81 @@ def select_curves_for_preview(ui, curves):
     return selected
 
 
-# -----------------------------------------------------------------------------
-# Target sketch and summaries
-# -----------------------------------------------------------------------------
-
-def get_target_sketch(app, ui):
-    """
-    Find the sketch targeted by the command.
-    
-        The active edit sketch is preferred. If none exists, the function tries the
-        current selection and the parent sketch of a selected curve.
-    
-        Parameters:
-            app (adsk.core.Application): Fusion application object.
-            ui (adsk.core.UserInterface): Fusion user interface object.
-    
-        Returns:
-            adsk.fusion.Sketch | None: Target sketch or None if not found.
-    """
-    try:
-        active = app.activeEditObject
-        if active and active.objectType == adsk.fusion.Sketch.classType():
-            return adsk.fusion.Sketch.cast(active)
-    except:
-        pass
-
-    try:
-        selections = ui.activeSelections
-
-        if selections.count > 0:
-            entity = selections.item(0).entity
-
-            sketch = adsk.fusion.Sketch.cast(entity)
-            if sketch:
-                return sketch
-
-            try:
-                parent = entity.parentSketch
-                if parent:
-                    return adsk.fusion.Sketch.cast(parent)
-            except:
-                pass
-    except:
-        pass
-
-    return None
-
 
 def line_count_to_delete(plan):
     """
-    Count line curves planned for replacement.
-    
-        Parameters:
-            plan (CleanupPlan): Cleanup plan to summarize.
-    
-        Returns:
-            int: Number of source line curves to delete/replace.
+    Count source curves that would be deleted/replaced by line merge groups.
+
+    Parameters:
+        plan (CleanupPlan): Current cleanup plan.
+
+    Returns:
+        int: Number of line-like source curves in line merge groups.
     """
-    return sum(len(g["source_curves"]) for g in plan.line_merge_groups)
+    total = 0
+    try:
+        for group in plan.line_merge_groups:
+            total += len(group.get("source_curves", []))
+    except:
+        pass
+    return total
 
 
 def line_count_to_create(plan):
     """
-    Count replacement line curves planned for creation.
-    
-        Parameters:
-            plan (CleanupPlan): Cleanup plan to summarize.
-    
-        Returns:
-            int: Number of replacement line curves.
+    Count replacement line curves that would be created by line merge groups.
+
+    Parameters:
+        plan (CleanupPlan): Current cleanup plan.
+
+    Returns:
+        int: Number of replacement line curves.
     """
-    return sum(len(g["result_curves"]) for g in plan.line_merge_groups)
+    total = 0
+    try:
+        for group in plan.line_merge_groups:
+            total += len(group.get("result_curves", []))
+    except:
+        pass
+    return total
 
 
 def circular_count_to_delete(plan):
     """
-    Count circular curves planned for replacement.
-    
-        Parameters:
-            plan (CleanupPlan): Cleanup plan to summarize.
-    
-        Returns:
-            int: Number of source arcs/circles to delete/replace.
+    Count source curves that would be deleted/replaced by circular merge groups.
+
+    Parameters:
+        plan (CleanupPlan): Current cleanup plan.
+
+    Returns:
+        int: Number of circular source curves in circular merge groups.
     """
-    return sum(len(g["source_curves"]) for g in plan.circular_merge_groups)
+    total = 0
+    try:
+        for group in plan.circular_merge_groups:
+            total += len(group.get("source_curves", []))
+    except:
+        pass
+    return total
 
 
 def circular_count_to_create(plan):
     """
-    Count replacement circular curves planned for creation.
-    
-        Parameters:
-            plan (CleanupPlan): Cleanup plan to summarize.
-    
-        Returns:
-            int: Number of replacement arcs/circles.
-    """
-    return sum(len(g["result_curves"]) for g in plan.circular_merge_groups)
+    Count replacement circular curves that would be created by circular merge groups.
 
+    Parameters:
+        plan (CleanupPlan): Current cleanup plan.
+
+    Returns:
+        int: Number of replacement circular curves.
+    """
+    total = 0
+    try:
+        for group in plan.circular_merge_groups:
+            total += len(group.get("result_curves", []))
+    except:
+        pass
+    return total
 
 
 def preview_replacement_curve_count(plan):
@@ -2739,6 +2750,11 @@ def build_summary(plan, title=None):
     lines.append("{}: {}".format(tr("result_active_count"), plan.active_guard_curve_count))
     lines.append("{}: {}".format(tr("result_ignored_splines"), plan.ignored_splines_due_to_svg_disabled))
     lines.append("{}: {}".format(tr("result_fixed_skipped"), plan.fixed_geometry_skipped))
+    lines.append("{}: {}".format(tr("result_limit_total"), getattr(plan.settings, "max_safe_total_curves", MAX_SAFE_TOTAL_CURVES)))
+    lines.append("{}: {}".format(tr("result_limit_lines"), getattr(plan.settings, "max_safe_lines", MAX_SAFE_LINES)))
+    lines.append("{}: {}".format(tr("result_limit_splines"), getattr(plan.settings, "max_safe_splines", MAX_SAFE_SPLINES)))
+    lines.append("{}: {}".format(tr("result_limit_svg_scan"), getattr(plan.settings, "max_svg_splines_to_analyze", MAX_SVG_SPLINES_TO_ANALYZE)))
+    lines.append("{}: {}".format(tr("result_limit_selection"), getattr(plan.settings, "max_preview_selections", MAX_PREVIEW_SELECTIONS)))
     lines.append("{}: {}".format(tr("result_selected_only"), "yes" if getattr(plan.settings, "selected_geometry_only", False) else "no"))
     lines.append("{}: {}".format(tr("result_auto_selected"), "yes" if getattr(plan.settings, "auto_selected_geometry_scope", False) else "no"))
     lines.append("{}: {}".format(tr("result_line_only_fast"), "yes" if getattr(plan.settings, "line_only_fast_mode", False) else "no"))
@@ -3015,7 +3031,7 @@ def curves_for_exact_duplicate_scan(sketch, settings, plan=None):
             count = col.count
 
             if name in ("sketchFittedSplines", "sketchControlPointSplines"):
-                count = min(count, MAX_SVG_SPLINES_TO_ANALYZE)
+                count = min(count, getattr(settings, "max_svg_splines_to_analyze", MAX_SVG_SPLINES_TO_ANALYZE))
 
             for i in range(count):
                 curve = col.item(i)
@@ -3067,7 +3083,7 @@ def line_like_items_for_plan(plan):
                 count = col.count
 
                 for i in range(count):
-                    if analyzed_svg_splines >= MAX_SVG_SPLINES_TO_ANALYZE:
+                    if analyzed_svg_splines >= getattr(settings, "max_svg_splines_to_analyze", MAX_SVG_SPLINES_TO_ANALYZE):
                         plan.svg_spline_candidates_skipped += max(0, count - i)
                         break
 
@@ -3200,6 +3216,13 @@ _INPUT_IDS = {
     "selected_only": "selectedOnly",
     "line_only_fast": "lineOnlyFast",
     "ignore_fixed": "ignoreFixedGeometry",
+    "limit_total_curves": "limitTotalCurves",
+    "limit_lines": "limitLines",
+    "limit_splines": "limitSplines",
+    "limit_svg_scan": "limitSvgScan",
+    "limit_selection": "limitSelection",
+    "limits_warning": "limitsWarning",
+    "limits_intro": "limitsIntro",
     "merge_lines": "mergeLines",
     "merge_circular": "mergeCircular",
     "svg_splines": "svgSplinesAsLines",
@@ -3252,6 +3275,17 @@ def add_command_inputs(cmd):
     group_inputs.addBoolValueInput(_INPUT_IDS["svg_splines"], tr("svg_splines"), True, "", False)
     group_inputs.addBoolValueInput(_INPUT_IDS["allow_large"], tr("allow_large"), True, "", False)
     group_inputs.addTextBoxCommandInput(_INPUT_IDS["svg_warning"], "", tr("svg_warning"), 4, True)
+
+    limits_group = inputs.addGroupCommandInput("performanceLimitsGroup", tr("limits_group"))
+    limits_group.isExpanded = False
+    limits_inputs = limits_group.children
+    limits_inputs.addTextBoxCommandInput(_INPUT_IDS["limits_intro"], "", tr("limits_intro"), 2, True)
+    limits_inputs.addIntegerSpinnerCommandInput(_INPUT_IDS["limit_total_curves"], tr("limit_total_curves"), 100, 100000, 100, MAX_SAFE_TOTAL_CURVES)
+    limits_inputs.addIntegerSpinnerCommandInput(_INPUT_IDS["limit_lines"], tr("limit_lines"), 100, 100000, 100, MAX_SAFE_LINES)
+    limits_inputs.addIntegerSpinnerCommandInput(_INPUT_IDS["limit_splines"], tr("limit_splines"), 10, 100000, 10, MAX_SAFE_SPLINES)
+    limits_inputs.addIntegerSpinnerCommandInput(_INPUT_IDS["limit_svg_scan"], tr("limit_svg_scan"), 0, 100000, 50, MAX_SVG_SPLINES_TO_ANALYZE)
+    limits_inputs.addIntegerSpinnerCommandInput(_INPUT_IDS["limit_selection"], tr("limit_selection"), 0, 100000, 50, MAX_PREVIEW_SELECTIONS)
+    limits_inputs.addTextBoxCommandInput(_INPUT_IDS["limits_warning"], "", tr("limits_warning"), 3, True)
 
     group_inputs.addBoolValueInput(_INPUT_IDS["allow_reference"], tr("allow_reference"), True, "", False)
     group_inputs.addBoolValueInput(_INPUT_IDS["allow_constrained"], tr("allow_constrained"), True, "", False)
@@ -3325,10 +3359,24 @@ def read_settings_from_inputs(inputs):
         except:
             return default
 
+    def integer_value(input_id, default=0):
+        item = get_input_by_id(inputs, input_id)
+        if not item:
+            return int(default)
+        try:
+            return int(item.value)
+        except:
+            return int(default)
+
     settings.delete_exact_duplicates = bool_value(_INPUT_IDS["delete_exact"], True)
     settings.selected_geometry_only = bool_value(_INPUT_IDS["selected_only"], False)
     settings.line_only_fast_mode = bool_value(_INPUT_IDS["line_only_fast"], False)
     settings.ignore_fixed_geometry = bool_value(_INPUT_IDS["ignore_fixed"], True)
+    settings.max_safe_total_curves = max(0, integer_value(_INPUT_IDS["limit_total_curves"], MAX_SAFE_TOTAL_CURVES))
+    settings.max_safe_lines = max(0, integer_value(_INPUT_IDS["limit_lines"], MAX_SAFE_LINES))
+    settings.max_safe_splines = max(0, integer_value(_INPUT_IDS["limit_splines"], MAX_SAFE_SPLINES))
+    settings.max_svg_splines_to_analyze = max(0, integer_value(_INPUT_IDS["limit_svg_scan"], MAX_SVG_SPLINES_TO_ANALYZE))
+    settings.max_preview_selections = max(0, integer_value(_INPUT_IDS["limit_selection"], MAX_PREVIEW_SELECTIONS))
     settings.merge_partially_overlapping_lines = bool_value(_INPUT_IDS["merge_lines"], True)
     settings.merge_partially_overlapping_circular_curves = bool_value(_INPUT_IDS["merge_circular"], False)
     settings.treat_near_straight_splines_as_lines = bool_value(_INPUT_IDS["svg_splines"], False)
@@ -3373,6 +3421,70 @@ def prepare_analysis_scope_from_selection(ui, sketch, settings):
     settings.selected_curves = None
     settings.auto_selected_geometry_scope = False
     return None
+
+
+
+def get_target_sketch(app, ui):
+    """
+    Return the sketch that should be analyzed by the command.
+
+    Priority:
+    1. active sketch when the user is currently editing a sketch;
+    2. parent sketch of a selected sketch curve;
+    3. selected Sketch object;
+    4. first editable sketch found in the active design.
+
+    Parameters:
+        app (adsk.core.Application): Fusion application.
+        ui (adsk.core.UserInterface): Fusion user interface.
+
+    Returns:
+        adsk.fusion.Sketch: Target sketch.
+
+    Raises:
+        RuntimeError: If no valid sketch can be found.
+    """
+    try:
+        active_edit = app.activeEditObject
+        if active_edit and active_edit.objectType == adsk.fusion.Sketch.classType():
+            return active_edit
+    except:
+        pass
+
+    try:
+        selections = ui.activeSelections
+        for i in range(selections.count):
+            try:
+                entity = selections.item(i).entity
+
+                if entity.objectType == adsk.fusion.Sketch.classType():
+                    return entity
+
+                try:
+                    parent_sketch = entity.parentSketch
+                    if parent_sketch:
+                        return parent_sketch
+                except:
+                    pass
+            except:
+                pass
+    except:
+        pass
+
+    try:
+        design = adsk.fusion.Design.cast(app.activeProduct)
+        if design:
+            root = design.rootComponent
+            sketches = root.sketches
+            if sketches and sketches.count > 0:
+                return sketches.item(0)
+    except:
+        pass
+
+    raise RuntimeError(
+        "No target sketch found. Open or edit the sketch to clean, or select one "
+        "or more sketch curves before running the command."
+    )
 
 
 # -----------------------------------------------------------------------------
