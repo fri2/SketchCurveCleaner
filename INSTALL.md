@@ -1,4 +1,4 @@
-# Sketch Curve Cleaner v16.0.0 - Installation
+# Sketch Curve Cleaner v20.0.0 - Installation
 
 ## Package layout
 

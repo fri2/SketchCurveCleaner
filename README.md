@@ -2,12 +2,54 @@
 
 ## Version
 
-Current version: **16.0.0**
+Current version: **20.0.0**
 
 **Sketch Curve Cleaner** is an Autodesk Fusion 360 add-in that helps preview and clean duplicated or overlapping sketch curves.
 
 The source code, comments, installation documentation, and repository documentation are written in English.  
 The Fusion 360 command UI is localized at runtime according to the language selected by the user in Fusion 360, when that language can be detected.
+
+
+## Important warning for imported SVG sketches
+
+Imported SVG files can produce very dense Fusion 360 sketches.
+
+A visually simple SVG can become:
+
+```text
+- thousands of tiny line segments;
+- many fitted splines;
+- many control-point splines;
+- duplicated curves created by import/export round trips;
+- fragmented contours that are expensive to inspect through the Fusion API.
+```
+
+Because of this, clicking **Test** on a large imported SVG can be slow and may
+make Fusion look as if it is looping or frozen.
+
+Recommended precautions:
+
+```text
+1. Save the Fusion design before running the add-in.
+2. Work on a copy of the sketch when possible.
+3. Keep "Treat near-straight SVG/imported splines as lines" disabled by default.
+4. Keep "Allow large sketch analysis" disabled by default.
+5. Run Test first on a small extract of the SVG.
+6. Split or simplify the SVG before importing when the sketch is very dense.
+7. Clean the SVG in Inkscape or another vector editor before import.
+```
+
+Do not enable:
+
+```text
+Treat near-straight SVG/imported splines as lines
+Allow large sketch analysis
+```
+
+on a large imported SVG unless you knowingly accept that Fusion may become slow.
+
+Version 20 displays this warning directly in the Fusion 360 command dialog.
+
 
 ## Author
 
@@ -115,6 +157,58 @@ Recommended use:
   expected contour;
 - avoid applying blindly on sketches with heavy parametric constraints unless
   **Merge/delete constrained or dimensioned geometry** is intentionally enabled.
+
+
+
+### Treat near-straight SVG/imported splines as lines
+
+Default: **disabled**
+
+This option is designed for sketches created from imported SVG files, but it can be slow on very dense imports. Enable it only when regular line cleanup misses visually straight SVG lines.
+
+A visually straight SVG segment is not always imported into Fusion 360 as a true
+`SketchLine`. Depending on the SVG content and the importer, it may become a
+very short fitted spline, a control-point spline, or a fragmented set of
+segments. If the cleaner only looks at `SketchLine` objects, some superposed
+"lines" from SVG imports can be missed.
+
+When this option is enabled, the add-in inspects fitted and control-point splines
+and treats them as line candidates only when they are geometrically almost
+straight:
+
+```text
+- the spline has a usable start point and end point;
+- its definition points stay close to the chord from start to end;
+- its curve length is close to the chord length;
+- the deviation is within the active tolerance plus a small relative allowance.
+```
+
+Accepted near-straight splines participate in:
+
+```text
+- exact duplicate detection;
+- partial overlap detection;
+- split/merge of collinear segments.
+```
+
+When **Apply** is used, accepted spline-like line segments may be replaced by real
+Fusion sketch lines. This is usually desirable for SVG cleanup and laser/DXF
+workflows because it simplifies the sketch.
+
+Recommended use:
+
+- keep enabled for SVG imports;
+- click **Test** first and inspect the selected curves;
+- disable it if you intentionally need to preserve spline objects exactly as
+  splines;
+- use a conservative tolerance first, for example `0.001 cm`.
+
+Risk:
+
+```text
+A very shallow curved spline could be treated as a straight line if the tolerance
+is too large.
+```
 
 ### Split/merge partially overlapping circular curves
 
@@ -543,7 +637,7 @@ visible and geometrically aligned with the actual sketch.
 The add-in version is defined in the Python source:
 
 ```python
-ADDIN_VERSION = "16.0.0"
+ADDIN_VERSION = "20.0.0"
 ```
 
 The same version is also stored in the Fusion manifest file and displayed in the
@@ -586,3 +680,78 @@ The final Fusion 360 installation path is:
 ```text
 %APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\SketchCurveCleanerLocalizedAddIn
 ```
+
+
+## Performance notes for SVG imports
+
+SVG imports can create very large sketches. A drawing that visually looks simple
+may become hundreds or thousands of small splines or micro-segments inside
+Fusion 360.
+
+For this reason, version 18 is intentionally more conservative:
+
+```text
+- SVG spline analysis is disabled by default.
+- At most 300 imported splines are analyzed when SVG spline mode is enabled.
+- At most 24 definition points per spline are inspected.
+- The add-in no longer calls spline.length during near-straight detection.
+- Preview geometry is skipped when more than 300 replacement curves would be drawn.
+- Selection is limited to 300 curves to keep Fusion responsive.
+```
+
+If Fusion feels like it is looping:
+
+```text
+1. Leave "Treat near-straight SVG/imported splines as lines" disabled.
+2. Run Test with only exact duplicates and straight-line merge enabled.
+3. If missing overlaps remain, enable SVG spline mode and try again.
+4. Use a small tolerance first, for example 0.001 cm.
+5. If the sketch is huge, split the SVG before importing or clean it in Inkscape first.
+```
+
+When the performance limits are reached, the Test summary reports skipped splines,
+limited selection, or skipped preview geometry.
+
+
+## Version 19: no-loop guard for dense SVG sketches
+
+Version 19 adds a hard safe-mode guard before the add-in starts expensive sketch
+analysis.
+
+Before **Test** or **Apply**, the add-in now counts sketch curve collections
+without materializing every curve object. If the sketch is too dense, the command
+stops immediately and displays a diagnostic summary instead of continuing.
+
+Default safe limits:
+
+```text
+MAX_SAFE_TOTAL_CURVES = 1200
+MAX_SAFE_LINES        = 1000
+MAX_SAFE_SPLINES      = 150
+```
+
+A new option is available in the dialog:
+
+```text
+Allow large sketch analysis (can be slow)
+```
+
+Leave it disabled by default. Enable it only when you knowingly want to run the
+analysis on a large sketch and you accept that Fusion may become slow.
+
+This guard is especially important for imported SVG files, because a visually
+simple SVG may become thousands of sketch splines or micro-segments inside Fusion.
+
+If the guard blocks the test, recommended actions are:
+
+```text
+1. Split the SVG into smaller parts before importing.
+2. Clean duplicates in Inkscape before import.
+3. Convert straight SVG segments to simple paths/lines before import.
+4. Run the add-in on smaller sketches instead of one massive sketch.
+5. Only then consider enabling "Allow large sketch analysis".
+```
+
+Also, when SVG spline mode is disabled, exact duplicate scanning no longer
+materializes all spline entities. This prevents a common slow path on dense SVG
+imports.

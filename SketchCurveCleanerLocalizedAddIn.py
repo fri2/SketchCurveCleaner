@@ -25,8 +25,9 @@ Main features:
 - Optional merge of construction geometry with normal geometry.
 
 Important limitation:
-Partial curve merge currently supports straight lines and circular curves
-(arcs/circles). Ellipses and splines are handled only as exact duplicates.
+Partial curve merge supports straight lines, near-straight SVG-imported
+splines, and circular curves (arcs/circles). Ellipses and non-straight
+splines are handled only as exact duplicates.
 """
 
 import math
@@ -52,7 +53,7 @@ import adsk.fusion
 # -----------------------------------------------------------------------------
 
 ADDIN_NAME = "Sketch Curve Cleaner"
-ADDIN_VERSION = "16.0.0"
+ADDIN_VERSION = "20.0.0"
 ADDIN_AUTHOR = "RICHARD Francois"
 ADDIN_LICENSE = "GPL-3.0-only"
 ADDIN_COPYRIGHT = "Copyright (C) 2026 RICHARD Francois"
@@ -64,6 +65,15 @@ PREVIEW_SKETCH_NAME = "__PREVIEW_Clean_Sketch_Overlaps__"
 # Fusion API uses centimeters internally.
 # 0.001 cm = 0.01 mm.
 DEFAULT_TOLERANCE_CM = 0.001
+# Performance guardrails for very dense imported SVG sketches.
+MAX_SVG_SPLINES_TO_ANALYZE = 300
+MAX_SPLINE_DEFINITION_POINTS = 24
+MAX_PREVIEW_REPLACEMENT_CURVES = 300
+MAX_PREVIEW_SELECTIONS = 300
+# Hard fail-fast limits used before any expensive Fusion API iteration.
+MAX_SAFE_TOTAL_CURVES = 1200
+MAX_SAFE_LINES = 1000
+MAX_SAFE_SPLINES = 150
 
 # Try these panel IDs first. Fusion internal IDs can vary, so the add-in also
 # falls back to known Scripts/Add-Ins panels when needed.
@@ -106,11 +116,16 @@ _STRINGS = {
         ),
         "intro": (
             "Use Test to preview the cleanup. Apply modifies the sketch. "
-            "A temporary preview sketch is created for merged replacement curves."
+            "Temporary preview geometry is created for merged replacement curves."
         ),
         "settings_group": "Cleanup options",
         "delete_exact": "Delete exact duplicate curves",
         "merge_lines": "Split/merge partially overlapping straight lines",
+        "svg_splines": "Treat near-straight SVG/imported splines as lines (slower)",
+        "allow_large": "Allow large sketch analysis (can be slow)",
+        "large_blocked_title": "Large sketch analysis blocked by safe mode.",
+        "large_blocked_hint": "The sketch is too dense for a safe Test. Split/clean the SVG first, disable costly options, or enable large sketch analysis knowingly.",
+        "svg_warning": "Warning: imported SVG sketches can contain thousands of micro-segments or splines. Test can become very slow. Keep SVG spline analysis and large sketch analysis disabled unless you are working on a small sketch or a copy.",
         "merge_circular": "Split/merge partially overlapping circular curves (arcs/circles)",
         "allow_reference": "Also delete projected/reference geometry",
         "allow_constrained": "Merge/delete constrained or dimensioned geometry",
@@ -131,6 +146,10 @@ _STRINGS = {
         "result_line_groups": "Overlapping line groups",
         "result_line_delete": "Lines to replace",
         "result_line_create": "Merged lines to create",
+        "result_svg_splines": "Near-straight imported splines treated as lines",
+        "result_svg_skipped": "Imported splines skipped by performance limit",
+        "result_preview_limited": "Preview geometry skipped by performance limit",
+        "result_selection_limited": "Selection limited for performance",
         "result_circular_groups": "Overlapping circular curve groups",
         "result_circular_delete": "Circular curves to replace",
         "result_circular_create": "Merged circular curves to create",
@@ -151,8 +170,8 @@ _STRINGS = {
             "Warning: merging construction and normal geometry can change sketch intent."
         ),
         "partial_limit": (
-            "Note: partial split/merge supports straight lines and circular arcs/circles. "
-            "Ellipses and splines are processed only as exact duplicates."
+            "Note: partial split/merge supports straight lines, near-straight SVG/imported splines, "
+            "and circular arcs/circles. Ellipses and non-straight splines are processed only as exact duplicates."
         ),
         "addin_loaded_no_panel": (
             "The add-in was loaded, but no suitable toolbar panel was found. "
@@ -169,11 +188,16 @@ _STRINGS = {
         ),
         "intro": (
             "Utilise Test pour prévisualiser le nettoyage. Appliquer modifie l’esquisse. "
-            "Une esquisse temporaire est créée pour afficher les courbes fusionnées."
+            "Une prévisualisation temporaire est créée pour afficher les courbes fusionnées."
         ),
         "settings_group": "Options de nettoyage",
         "delete_exact": "Supprimer les courbes exactement dupliquées",
         "merge_lines": "Découper/fusionner les lignes droites partiellement superposées",
+        "svg_splines": "Traiter les splines SVG/importées quasi droites comme des lignes (plus lent)",
+        "allow_large": "Autoriser l’analyse des grandes esquisses (peut être lent)",
+        "large_blocked_title": "Analyse de grande esquisse bloquée par le mode sécurisé.",
+        "large_blocked_hint": "L’esquisse est trop dense pour un Test sûr. Découpe/nettoie le SVG d’abord, désactive les options coûteuses, ou autorise volontairement l’analyse des grandes esquisses.",
+        "svg_warning": "Attention : les esquisses importées depuis SVG peuvent contenir des milliers de micro-segments ou de splines. Test peut devenir très lent. Gardez l’analyse des splines SVG et l’analyse des grandes esquisses désactivées, sauf sur une petite esquisse ou une copie.",
         "merge_circular": "Découper/fusionner les courbes circulaires partiellement superposées (arcs/cercles)",
         "allow_reference": "Supprimer aussi les géométries projetées/référencées",
         "allow_constrained": "Fusionner/supprimer les géométries contraintes ou cotées",
@@ -194,6 +218,10 @@ _STRINGS = {
         "result_line_groups": "Groupes de lignes superposées",
         "result_line_delete": "Lignes à remplacer",
         "result_line_create": "Lignes fusionnées à créer",
+        "result_svg_splines": "Splines importées quasi droites traitées comme lignes",
+        "result_svg_skipped": "Splines importées ignorées par limite de performance",
+        "result_preview_limited": "Prévisualisation géométrique ignorée par limite de performance",
+        "result_selection_limited": "Sélection limitée pour les performances",
         "result_circular_groups": "Groupes de courbes circulaires superposées",
         "result_circular_delete": "Courbes circulaires à remplacer",
         "result_circular_create": "Courbes circulaires fusionnées à créer",
@@ -214,8 +242,8 @@ _STRINGS = {
             "Attention : fusionner géométrie de construction et géométrie normale peut modifier l’intention de conception."
         ),
         "partial_limit": (
-            "Note : la découpe/fusion partielle prend en charge les lignes droites et les arcs/cercles. "
-            "Les ellipses et splines sont traitées uniquement comme doublons exacts."
+            "Note : la découpe/fusion partielle prend en charge les lignes droites, les splines SVG/importées quasi droites, "
+            "et les arcs/cercles. Les ellipses et splines non droites sont traitées uniquement comme doublons exacts."
         ),
         "addin_loaded_no_panel": (
             "L’add-in est chargé, mais aucun panneau de barre d’outils adapté n’a été trouvé. "
@@ -284,6 +312,9 @@ class CleanupSettings:
             merge_partially_overlapping_lines (bool): Enables partial line merge.
             merge_partially_overlapping_circular_curves (bool): Enables partial
                 arc/circle merge.
+            treat_near_straight_splines_as_lines (bool): Treats SVG/imported
+                fitted/control-point splines that are geometrically straight
+                as line candidates.
             allow_reference_geometry (bool): Allows projected/reference geometry
                 to be changed.
             allow_constrained_or_dimensioned (bool): Allows constrained or
@@ -305,6 +336,8 @@ class CleanupSettings:
         self.delete_exact_duplicates = True
         self.merge_partially_overlapping_lines = True
         self.merge_partially_overlapping_circular_curves = False
+        self.treat_near_straight_splines_as_lines = False
+        self.allow_large_sketch_analysis = False
         self.allow_reference_geometry = False
         self.allow_constrained_or_dimensioned = False
         self.merge_construction_and_normal = False
@@ -348,6 +381,10 @@ class CleanupPlan:
         self.protected_skipped = 0
         self.constrained_groups_skipped = 0
         self.unsupported_skipped = 0
+        self.svg_straight_spline_candidates = 0
+        self.svg_spline_candidates_skipped = 0
+        self.preview_geometry_limited = False
+        self.selection_limited = False
 
     def all_curves_to_delete_or_replace(self):
         """
@@ -996,8 +1033,16 @@ def curve_signature(curve, settings):
     try:
         ot = curve.objectType
 
-        if ot == adsk.fusion.SketchLine.classType():
-            return line_signature(curve, settings)
+        line_like = line_like_segment_from_curve(curve, settings)
+        if line_like:
+            start, end, is_spline = line_like
+            return line_like_signature(curve, start, end, is_spline, settings)
+
+        if is_supported_spline_curve(curve):
+            # Dense SVG imports may contain thousands of splines. Non-straight
+            # splines are skipped by default to keep Test responsive.
+            return None
+
         if ot == adsk.fusion.SketchCircle.classType():
             return circle_signature(curve, settings)
         if ot == adsk.fusion.SketchArc.classType():
@@ -1049,6 +1094,351 @@ def all_supported_curves(sketch):
     return curves
 
 
+
+# -----------------------------------------------------------------------------
+# SVG/imported near-straight spline support
+# -----------------------------------------------------------------------------
+
+def object_type_matches(curve, fusion_class_name):
+    """
+    Check a Fusion sketch curve object type without failing on older APIs.
+
+    Parameters:
+        curve: Fusion sketch curve.
+        fusion_class_name (str): Class name in adsk.fusion, for example
+            "SketchFittedSpline".
+
+    Returns:
+        bool: True when the curve objectType matches the requested class.
+    """
+    try:
+        cls = getattr(adsk.fusion, fusion_class_name)
+        return curve.objectType == cls.classType()
+    except:
+        return False
+
+
+def is_supported_spline_curve(curve):
+    """
+    Check whether a curve is a fitted or control-point spline.
+
+    SVG imports can represent visually straight segments as splines. This helper
+    identifies the spline types that the add-in can inspect.
+
+    Parameters:
+        curve: Fusion sketch curve.
+
+    Returns:
+        bool: True for fitted or control-point splines.
+    """
+    return (
+        object_type_matches(curve, "SketchFittedSpline")
+        or object_type_matches(curve, "SketchControlPointSpline")
+    )
+
+
+def safe_sketch_point_geometry(obj, attr_name):
+    """
+    Read a SketchPoint geometry property safely.
+
+    Parameters:
+        obj: Fusion object containing a sketch point attribute.
+        attr_name (str): Name such as "startSketchPoint" or "endSketchPoint".
+
+    Returns:
+        adsk.core.Point3D | None: Point geometry, or None.
+    """
+    try:
+        sketch_point = getattr(obj, attr_name)
+        if sketch_point:
+            return sketch_point.geometry
+    except:
+        pass
+    return None
+
+
+def append_unique_point(points, point, settings):
+    """
+    Append a point only if it is not already present within tolerance.
+
+    Parameters:
+        points (list): List of Point3D objects.
+        point (adsk.core.Point3D | None): Point to append.
+        settings (CleanupSettings): Active tolerance settings.
+
+    Returns:
+        None.
+    """
+    if not point:
+        return
+
+    key = qpt(point, settings)
+    for existing in points:
+        if qpt(existing, settings) == key:
+            return
+
+    points.append(point)
+
+
+def collection_points(collection, settings):
+    """
+    Extract point geometries from a Fusion collection.
+
+    Parameters:
+        collection: Fusion collection containing SketchPoint-like objects.
+        settings (CleanupSettings): Active tolerance settings.
+
+    Returns:
+        list[adsk.core.Point3D]: Extracted unique points.
+    """
+    points = []
+
+    try:
+        for i in range(min(collection.count, MAX_SPLINE_DEFINITION_POINTS)):
+            item = collection.item(i)
+
+            try:
+                append_unique_point(points, item.geometry, settings)
+                continue
+            except:
+                pass
+
+            try:
+                append_unique_point(points, item, settings)
+            except:
+                pass
+    except:
+        pass
+
+    return points
+
+
+def spline_definition_points(curve, settings):
+    """
+    Collect points that define an imported spline.
+
+    The function tries several API properties because SVG/imported geometry may
+    become either fitted splines or control-point splines, depending on Fusion
+    version and import content.
+
+    Parameters:
+        curve: Fusion sketch spline.
+        settings (CleanupSettings): Active tolerance settings.
+
+    Returns:
+        list[adsk.core.Point3D]: Unique points describing the spline.
+    """
+    points = []
+
+    append_unique_point(points, safe_sketch_point_geometry(curve, "startSketchPoint"), settings)
+
+    for attr_name in ("fitPoints", "controlPoints"):
+        try:
+            for p in collection_points(getattr(curve, attr_name), settings):
+                append_unique_point(points, p, settings)
+        except:
+            pass
+
+    # Do not inspect controlFrameLines here. On dense SVG imports this can be
+    # very expensive and can make Fusion look as if it is looping.
+
+    append_unique_point(points, safe_sketch_point_geometry(curve, "endSketchPoint"), settings)
+
+    return points
+
+
+def point_line_distance_xy(point, start, end):
+    """
+    Compute the 2D perpendicular distance from a point to a line.
+
+    Parameters:
+        point (adsk.core.Point3D): Point to test.
+        start (adsk.core.Point3D): Line start.
+        end (adsk.core.Point3D): Line end.
+
+    Returns:
+        float: Perpendicular distance in centimeters.
+    """
+    dx = end.x - start.x
+    dy = end.y - start.y
+    length = math.sqrt(dx * dx + dy * dy)
+
+    if length <= 1e-12:
+        return dist(point, start)
+
+    return abs((point.x - start.x) * dy - (point.y - start.y) * dx) / length
+
+
+def projected_parameter_on_segment(point, start, end):
+    """
+    Project a point on a finite segment and return its normalized parameter.
+
+    Parameters:
+        point (adsk.core.Point3D): Point to project.
+        start (adsk.core.Point3D): Segment start.
+        end (adsk.core.Point3D): Segment end.
+
+    Returns:
+        float: Parameter where 0 is start and 1 is end.
+    """
+    dx = end.x - start.x
+    dy = end.y - start.y
+    denom = dx * dx + dy * dy
+
+    if denom <= 1e-24:
+        return 0.0
+
+    return ((point.x - start.x) * dx + (point.y - start.y) * dy) / denom
+
+
+def near_straight_spline_as_line_segment(curve, settings):
+    """
+    Convert a near-straight imported spline to a virtual line segment.
+
+    The spline is accepted only if all available definition points are close to
+    the chord from start to end, and the curve length is close to that chord.
+    This is intended for SVG/DXF imports where visually straight segments are
+    represented as splines.
+
+    Parameters:
+        curve: Fusion sketch spline to inspect.
+        settings (CleanupSettings): Active cleanup settings.
+
+    Returns:
+        tuple[adsk.core.Point3D, adsk.core.Point3D] | None: Start/end points
+        when the spline is near-straight, otherwise None.
+    """
+    if not getattr(settings, "treat_near_straight_splines_as_lines", False):
+        return None
+
+    if not is_supported_spline_curve(curve):
+        return None
+
+    points = spline_definition_points(curve, settings)
+    if len(points) < 2:
+        return None
+
+    start = safe_sketch_point_geometry(curve, "startSketchPoint") or points[0]
+    end = safe_sketch_point_geometry(curve, "endSketchPoint") or points[-1]
+
+    chord = dist(start, end)
+    if chord <= tol(settings):
+        return None
+
+    # Relative allowance keeps long SVG lines from being rejected because of
+    # tiny imported numerical noise. The absolute tolerance still dominates for
+    # normal CAD-size cleanup.
+    straightness_tol = max(tol(settings), chord * 0.001)
+
+    max_distance = 0.0
+    min_param = 0.0
+    max_param = 1.0
+
+    for point in points:
+        max_distance = max(max_distance, point_line_distance_xy(point, start, end))
+        param = projected_parameter_on_segment(point, start, end)
+        min_param = min(min_param, param)
+        max_param = max(max_param, param)
+
+    if max_distance > straightness_tol:
+        return None
+
+    # Reject splines whose definition points extend far beyond the endpoint chord.
+    endpoint_slop = max(0.05, 3.0 * tol(settings) / chord)
+    if min_param < -endpoint_slop or max_param > 1.0 + endpoint_slop:
+        return None
+
+    # Do not call curve.length here: it can be slow on thousands of SVG splines.
+
+    return (start, end)
+
+
+def line_like_segment_from_curve(curve, settings):
+    """
+    Return a line-like segment for SketchLine or near-straight imported spline.
+
+    Parameters:
+        curve: Fusion sketch curve.
+        settings (CleanupSettings): Active cleanup settings.
+
+    Returns:
+        tuple[adsk.core.Point3D, adsk.core.Point3D, bool] | None:
+        start, end and a boolean indicating whether the source was a spline.
+    """
+    try:
+        if curve.objectType == adsk.fusion.SketchLine.classType():
+            return (
+                curve.startSketchPoint.geometry,
+                curve.endSketchPoint.geometry,
+                False,
+            )
+    except:
+        pass
+
+    segment = near_straight_spline_as_line_segment(curve, settings)
+    if segment:
+        return (segment[0], segment[1], True)
+
+    return None
+
+
+def line_like_signature(curve, start, end, is_spline, settings):
+    """
+    Build a duplicate signature for a line-like curve.
+
+    Parameters:
+        curve: Source Fusion curve.
+        start (adsk.core.Point3D): Segment start.
+        end (adsk.core.Point3D): Segment end.
+        is_spline (bool): True if the source was an imported spline.
+        settings (CleanupSettings): Active cleanup settings.
+
+    Returns:
+        tuple: Hashable duplicate signature.
+    """
+    a = qpt(start, settings)
+    b = qpt(end, settings)
+
+    if b < a:
+        a, b = b, a
+
+    # Use "LINE" intentionally so a true SketchLine and a straight imported
+    # spline with the same endpoints are considered duplicates.
+    return ("LINE", construction_key(curve, settings), a, b)
+
+
+def line_like_group_key(curve, start, end, settings):
+    """
+    Build a support-line grouping key for a line-like curve.
+
+    Parameters:
+        curve: Source Fusion curve.
+        start (adsk.core.Point3D): Segment start.
+        end (adsk.core.Point3D): Segment end.
+        settings (CleanupSettings): Active cleanup settings.
+
+    Returns:
+        tuple | None: Grouping key or None for near-zero-length segments.
+    """
+    dx = end.x - start.x
+    dy = end.y - start.y
+
+    direction = normalize_dir_xy(dx, dy, settings)
+    if direction is None:
+        return None
+
+    ux, uy = direction
+    nx, ny = -uy, ux
+    offset = start.x * nx + start.y * ny
+
+    return (
+        construction_key(curve, settings),
+        q(ux, settings),
+        q(uy, settings),
+        q(offset, settings),
+    )
+
+
 # -----------------------------------------------------------------------------
 # Exact duplicate planning
 # -----------------------------------------------------------------------------
@@ -1068,7 +1458,7 @@ def plan_exact_duplicate_removal(plan):
 
     by_sig = {}
 
-    for curve in all_supported_curves(plan.sketch):
+    for curve in curves_for_exact_duplicate_scan(plan.sketch, plan.settings, plan):
         if not is_deletable_candidate(curve, plan.settings, plan):
             continue
 
@@ -1209,16 +1599,49 @@ def plan_line_merges(plan):
         return
 
     sc = plan.sketch.sketchCurves
-    lines_col = sc.sketchLines
-    lines = [lines_col.item(i) for i in range(lines_col.count)]
+    line_like_items = []
+
+    try:
+        lines_col = sc.sketchLines
+        for i in range(lines_col.count):
+            line = lines_col.item(i)
+            segment = line_like_segment_from_curve(line, plan.settings)
+            if segment:
+                start, end, is_spline = segment
+                line_like_items.append((line, start, end, is_spline))
+    except:
+        pass
+
+    if getattr(plan.settings, "treat_near_straight_splines_as_lines", False):
+        analyzed_svg_splines = 0
+        for collection_name in ("sketchFittedSplines", "sketchControlPointSplines"):
+            try:
+                col = getattr(sc, collection_name)
+                count = col.count
+
+                for i in range(count):
+                    if analyzed_svg_splines >= MAX_SVG_SPLINES_TO_ANALYZE:
+                        plan.svg_spline_candidates_skipped += max(0, count - i)
+                        break
+
+                    spline = col.item(i)
+                    analyzed_svg_splines += 1
+
+                    segment = line_like_segment_from_curve(spline, plan.settings)
+                    if segment:
+                        start, end, is_spline = segment
+                        line_like_items.append((spline, start, end, is_spline))
+                        plan.svg_straight_spline_candidates += 1
+            except:
+                pass
 
     groups = {}
 
-    for line in lines:
+    for line, p1, p2, is_spline in line_like_items:
         if not is_deletable_candidate(line, plan.settings, plan):
             continue
 
-        key = line_group_key(line, plan.settings)
+        key = line_like_group_key(line, p1, p2, plan.settings)
         if key is None:
             continue
 
@@ -1234,9 +1657,6 @@ def plan_line_merges(plan):
 
         ux /= length
         uy /= length
-
-        p1 = line.startSketchPoint.geometry
-        p2 = line.endSketchPoint.geometry
 
         t1 = projection_on_line(p1, ux, uy)
         t2 = projection_on_line(p2, ux, uy)
@@ -1643,6 +2063,199 @@ def plan_circular_merges(plan):
 # Plan creation and application
 # -----------------------------------------------------------------------------
 
+
+# -----------------------------------------------------------------------------
+# Large sketch / SVG safety guard
+# -----------------------------------------------------------------------------
+
+def safe_collection_count(sketch_curves, collection_name):
+    """
+    Return a sketch curve collection count without materializing curve objects.
+
+    Parameters:
+        sketch_curves: Fusion sketch.sketchCurves object.
+        collection_name (str): Collection property name.
+
+    Returns:
+        int: Collection count, or 0 if unavailable.
+    """
+    try:
+        col = getattr(sketch_curves, collection_name)
+        return int(col.count)
+    except:
+        return 0
+
+
+def sketch_curve_counts(sketch):
+    """
+    Count sketch curve collections without retrieving every entity.
+
+    This is intentionally much cheaper than iterating over all curves and is used
+    before Test/Apply to avoid making Fusion look as if it is looping on dense
+    imported SVG sketches.
+
+    Parameters:
+        sketch (adsk.fusion.Sketch): Sketch to inspect.
+
+    Returns:
+        dict: Counts by collection name plus total, line and spline totals.
+    """
+    sc = sketch.sketchCurves
+
+    counts = {
+        "sketchLines": safe_collection_count(sc, "sketchLines"),
+        "sketchArcs": safe_collection_count(sc, "sketchArcs"),
+        "sketchCircles": safe_collection_count(sc, "sketchCircles"),
+        "sketchEllipses": safe_collection_count(sc, "sketchEllipses"),
+        "sketchEllipticalArcs": safe_collection_count(sc, "sketchEllipticalArcs"),
+        "sketchFittedSplines": safe_collection_count(sc, "sketchFittedSplines"),
+        "sketchControlPointSplines": safe_collection_count(sc, "sketchControlPointSplines"),
+    }
+
+    counts["lines"] = counts["sketchLines"]
+    counts["splines"] = counts["sketchFittedSplines"] + counts["sketchControlPointSplines"]
+    counts["total"] = sum(
+        counts[name]
+        for name in (
+            "sketchLines",
+            "sketchArcs",
+            "sketchCircles",
+            "sketchEllipses",
+            "sketchEllipticalArcs",
+            "sketchFittedSplines",
+            "sketchControlPointSplines",
+        )
+    )
+
+    return counts
+
+
+def format_sketch_counts(counts):
+    """
+    Format sketch curve counts for the command summary.
+
+    Parameters:
+        counts (dict): Result of sketch_curve_counts.
+
+    Returns:
+        str: Multiline count summary.
+    """
+    return "\n".join([
+        "Total curves: {}".format(counts.get("total", 0)),
+        "Lines: {}".format(counts.get("sketchLines", 0)),
+        "Arcs: {}".format(counts.get("sketchArcs", 0)),
+        "Circles: {}".format(counts.get("sketchCircles", 0)),
+        "Ellipses: {}".format(counts.get("sketchEllipses", 0)),
+        "Elliptical arcs: {}".format(counts.get("sketchEllipticalArcs", 0)),
+        "Fitted splines: {}".format(counts.get("sketchFittedSplines", 0)),
+        "Control-point splines: {}".format(counts.get("sketchControlPointSplines", 0)),
+    ])
+
+
+def large_sketch_guard_message(sketch, settings):
+    """
+    Return a safe-mode blocking message when the sketch is too dense.
+
+    Parameters:
+        sketch (adsk.fusion.Sketch): Sketch to inspect.
+        settings (CleanupSettings): User settings.
+
+    Returns:
+        str | None: Blocking message, or None when analysis is allowed.
+    """
+    counts = sketch_curve_counts(sketch)
+
+    if getattr(settings, "allow_large_sketch_analysis", False):
+        return None
+
+    reasons = []
+
+    if counts["total"] > MAX_SAFE_TOTAL_CURVES:
+        reasons.append(
+            "total curves {} > safe limit {}".format(counts["total"], MAX_SAFE_TOTAL_CURVES)
+        )
+
+    if counts["lines"] > MAX_SAFE_LINES:
+        reasons.append(
+            "lines {} > safe limit {}".format(counts["lines"], MAX_SAFE_LINES)
+        )
+
+    if counts["splines"] > MAX_SAFE_SPLINES:
+        reasons.append(
+            "splines {} > safe limit {}".format(counts["splines"], MAX_SAFE_SPLINES)
+        )
+
+    if not reasons:
+        return None
+
+    message = []
+    message.append(tr("large_blocked_title"))
+    message.append("")
+    message.append(tr("large_blocked_hint"))
+    message.append("")
+    message.append(tr("svg_warning"))
+    message.append("")
+    message.append("Reason:")
+    for reason in reasons:
+        message.append("- " + reason)
+    message.append("")
+    message.append(format_sketch_counts(counts))
+    message.append("")
+    message.append(
+        "Recommended first step: simplify or split the SVG before import, or run "
+        "the cleaner on smaller parts of the sketch."
+    )
+
+    return "\n".join(message)
+
+
+def curves_for_exact_duplicate_scan(sketch, settings, plan=None):
+    """
+    Yield only curve collections that are safe and useful for exact duplicates.
+
+    Dense SVG imports often contain thousands of splines. When SVG spline mode is
+    disabled, splines are deliberately skipped instead of being materialized and
+    inspected one by one.
+
+    Parameters:
+        sketch (adsk.fusion.Sketch): Sketch to scan.
+        settings (CleanupSettings): Cleanup settings.
+        plan (CleanupPlan | None): Optional plan used for skipped counters.
+
+    Yields:
+        Fusion sketch curve objects.
+    """
+    sc = sketch.sketchCurves
+
+    collections = [
+        "sketchLines",
+        "sketchArcs",
+        "sketchCircles",
+        "sketchEllipses",
+        "sketchEllipticalArcs",
+    ]
+
+    if getattr(settings, "treat_near_straight_splines_as_lines", False):
+        collections.extend(["sketchFittedSplines", "sketchControlPointSplines"])
+    else:
+        try:
+            if plan:
+                plan.unsupported_skipped += (
+                    safe_collection_count(sc, "sketchFittedSplines")
+                    + safe_collection_count(sc, "sketchControlPointSplines")
+                )
+        except:
+            pass
+
+    for name in collections:
+        try:
+            col = getattr(sc, name)
+            for i in range(col.count):
+                yield col.item(i)
+        except:
+            pass
+
+
 def build_cleanup_plan(sketch, settings):
     """
     Analyze a sketch and build a complete cleanup plan.
@@ -1884,6 +2497,9 @@ def select_curves_for_preview(ui, curves):
 
     selected = 0
     for curve in curves:
+        if selected >= MAX_PREVIEW_SELECTIONS:
+            break
+
         try:
             if curve and curve.isValid:
                 ui.activeSelections.add(curve)
@@ -1993,6 +2609,20 @@ def circular_count_to_create(plan):
     return sum(len(g["result_curves"]) for g in plan.circular_merge_groups)
 
 
+
+def preview_replacement_curve_count(plan):
+    """
+    Count replacement curves that would be drawn for preview.
+
+    Parameters:
+        plan (CleanupPlan): Cleanup plan.
+
+    Returns:
+        int: Number of replacement curves in the plan.
+    """
+    return line_count_to_create(plan) + circular_count_to_create(plan)
+
+
 def build_summary(plan, title=None):
     """
     Build a localized text summary of a cleanup plan.
@@ -2022,12 +2652,21 @@ def build_summary(plan, title=None):
     lines.append("{}: {}".format(tr("result_line_groups"), len(plan.line_merge_groups)))
     lines.append("{}: {}".format(tr("result_line_delete"), line_count_to_delete(plan)))
     lines.append("{}: {}".format(tr("result_line_create"), line_count_to_create(plan)))
+    lines.append("{}: {}".format(tr("result_svg_splines"), plan.svg_straight_spline_candidates))
+    lines.append("{}: {}".format(tr("result_svg_skipped"), plan.svg_spline_candidates_skipped))
     lines.append("{}: {}".format(tr("result_circular_groups"), len(plan.circular_merge_groups)))
     lines.append("{}: {}".format(tr("result_circular_delete"), circular_count_to_delete(plan)))
     lines.append("{}: {}".format(tr("result_circular_create"), circular_count_to_create(plan)))
     lines.append("{}: {}".format(tr("result_protected"), plan.protected_skipped))
     lines.append("{}: {}".format(tr("result_constrained"), plan.constrained_groups_skipped))
     lines.append("{}: {}".format(tr("result_total_delete"), total_delete))
+
+    if plan.preview_geometry_limited:
+        lines.append("{}: yes".format(tr("result_preview_limited")))
+
+    if plan.selection_limited:
+        lines.append("{}: yes".format(tr("result_selection_limited")))
+
     lines.append("")
     lines.append(tr("partial_limit"))
 
@@ -2076,6 +2715,9 @@ _INPUT_IDS = {
     "delete_exact": "deleteExact",
     "merge_lines": "mergeLines",
     "merge_circular": "mergeCircular",
+    "svg_splines": "svgSplinesAsLines",
+    "allow_large": "allowLargeSketchAnalysis",
+    "svg_warning": "svgWarning",
     "allow_reference": "allowReference",
     "allow_constrained": "allowConstrained",
     "merge_construction": "mergeConstruction",
@@ -2117,6 +2759,9 @@ def add_command_inputs(cmd):
     group_inputs.addBoolValueInput(_INPUT_IDS["delete_exact"], tr("delete_exact"), True, "", True)
     group_inputs.addBoolValueInput(_INPUT_IDS["merge_lines"], tr("merge_lines"), True, "", True)
     group_inputs.addBoolValueInput(_INPUT_IDS["merge_circular"], tr("merge_circular"), True, "", False)
+    group_inputs.addBoolValueInput(_INPUT_IDS["svg_splines"], tr("svg_splines"), True, "", False)
+    group_inputs.addBoolValueInput(_INPUT_IDS["allow_large"], tr("allow_large"), True, "", False)
+    group_inputs.addTextBoxCommandInput(_INPUT_IDS["svg_warning"], "", tr("svg_warning"), 4, True)
 
     group_inputs.addBoolValueInput(_INPUT_IDS["allow_reference"], tr("allow_reference"), True, "", False)
     group_inputs.addBoolValueInput(_INPUT_IDS["allow_constrained"], tr("allow_constrained"), True, "", False)
@@ -2193,6 +2838,8 @@ def read_settings_from_inputs(inputs):
     settings.delete_exact_duplicates = bool_value(_INPUT_IDS["delete_exact"], True)
     settings.merge_partially_overlapping_lines = bool_value(_INPUT_IDS["merge_lines"], True)
     settings.merge_partially_overlapping_circular_curves = bool_value(_INPUT_IDS["merge_circular"], False)
+    settings.treat_near_straight_splines_as_lines = bool_value(_INPUT_IDS["svg_splines"], False)
+    settings.allow_large_sketch_analysis = bool_value(_INPUT_IDS["allow_large"], False)
     settings.allow_reference_geometry = bool_value(_INPUT_IDS["allow_reference"], False)
     settings.allow_constrained_or_dimensioned = bool_value(_INPUT_IDS["allow_constrained"], False)
     settings.merge_construction_and_normal = bool_value(_INPUT_IDS["merge_construction"], False)
@@ -2281,18 +2928,39 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
                 return
 
             settings = read_settings_from_inputs(inputs)
+            delete_preview_sketch(sketch)
+
+            guard = large_sketch_guard_message(sketch, settings)
+            if guard:
+                _command_state.last_plan = None
+                try:
+                    ui.activeSelections.clear()
+                except:
+                    pass
+                if summary_box:
+                    set_textbox_text(summary_box, guard)
+                return
+
             plan = build_cleanup_plan(sketch, settings)
             _command_state.last_plan = plan
 
-            delete_preview_sketch(sketch)
-            selected = select_curves_for_preview(ui, plan.all_curves_to_delete_or_replace())
-            preview_sketch = create_preview_sketch(plan)
+            affected_curves = plan.all_curves_to_delete_or_replace()
+            selected = select_curves_for_preview(ui, affected_curves)
+            plan.selection_limited = len(affected_curves) > selected
+
+            preview_sketch = None
+            replacement_count = preview_replacement_curve_count(plan)
+
+            if replacement_count <= MAX_PREVIEW_REPLACEMENT_CURVES:
+                preview_sketch = create_preview_sketch(plan)
+            else:
+                plan.preview_geometry_limited = True
 
             if plan.has_changes():
                 title = tr("preview_created") if preview_sketch else tr("preview_failed")
                 summary = build_summary(plan, title)
                 summary += "\n\n" + tr("preview_note")
-                summary += "\nSelected curves: {}".format(selected)
+                summary += "\nSelected curves: {} / {}".format(selected, len(affected_curves))
             else:
                 summary = build_summary(plan, tr("nothing_to_preview"))
 
@@ -2336,9 +3004,15 @@ class CommandExecuteHandler(adsk.core.CommandEventHandler):
                 return
 
             settings = read_settings_from_inputs(inputs)
+            delete_preview_sketch(sketch)
+
+            guard = large_sketch_guard_message(sketch, settings)
+            if guard:
+                ui.messageBox(guard, ADDIN_NAME)
+                return
+
             plan = build_cleanup_plan(sketch, settings)
 
-            delete_preview_sketch(sketch)
             deleted, created = apply_cleanup_plan(plan)
 
             _command_state.last_plan = plan
