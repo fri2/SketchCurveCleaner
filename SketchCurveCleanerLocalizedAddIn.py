@@ -53,7 +53,7 @@ import adsk.fusion
 # -----------------------------------------------------------------------------
 
 ADDIN_NAME = "Sketch Curve Cleaner"
-ADDIN_VERSION = "22.0.0"
+ADDIN_VERSION = "23.0.0"
 ADDIN_AUTHOR = "RICHARD Francois"
 ADDIN_LICENSE = "GPL-3.0-only"
 ADDIN_COPYRIGHT = "Copyright (C) 2026 RICHARD Francois"
@@ -130,6 +130,7 @@ _STRINGS = {
         "allow_large": "Allow large sketch analysis (can be slow)",
         "large_blocked_title": "Large sketch analysis blocked by safe mode.",
         "large_blocked_hint": "The sketch is too dense for a safe Test. Split/clean the SVG first, disable costly options, or enable large sketch analysis knowingly.",
+        "mixed_svg_note": "Dense SVG/spline geometry is ignored when SVG spline analysis is disabled. Standard sketch geometry can still be cleaned.",
         "svg_warning": "Warning: imported SVG sketches can contain thousands of micro-segments or splines. Test can become very slow. Keep SVG spline analysis and large sketch analysis disabled unless you are working on a small sketch or a copy.",
         "merge_circular": "Split/merge partially overlapping circular curves (arcs/circles)",
         "allow_reference": "Also delete projected/reference geometry",
@@ -153,6 +154,8 @@ _STRINGS = {
         "result_line_create": "Merged lines to create",
         "result_svg_splines": "Near-straight imported splines treated as lines",
         "result_svg_skipped": "Imported splines skipped by performance limit",
+        "result_ignored_splines": "Splines/SVG ignored because SVG analysis is disabled",
+        "result_active_count": "Curves considered by safe-mode guard",
         "result_preview_limited": "Preview geometry skipped by performance limit",
         "result_selection_limited": "Selection limited for performance",
         "result_selected_only": "Selected geometry only",
@@ -208,6 +211,7 @@ _STRINGS = {
         "allow_large": "Autoriser l’analyse des grandes esquisses (peut être lent)",
         "large_blocked_title": "Analyse de grande esquisse bloquée par le mode sécurisé.",
         "large_blocked_hint": "L’esquisse est trop dense pour un Test sûr. Découpe/nettoie le SVG d’abord, désactive les options coûteuses, ou autorise volontairement l’analyse des grandes esquisses.",
+        "mixed_svg_note": "La géométrie SVG/spline dense est ignorée quand l’analyse des splines SVG est désactivée. La géométrie d’esquisse standard peut quand même être nettoyée.",
         "svg_warning": "Attention : les esquisses importées depuis SVG peuvent contenir des milliers de micro-segments ou de splines. Test peut devenir très lent. Gardez l’analyse des splines SVG et l’analyse des grandes esquisses désactivées, sauf sur une petite esquisse ou une copie.",
         "merge_circular": "Découper/fusionner les courbes circulaires partiellement superposées (arcs/cercles)",
         "allow_reference": "Supprimer aussi les géométries projetées/référencées",
@@ -231,6 +235,8 @@ _STRINGS = {
         "result_line_create": "Lignes fusionnées à créer",
         "result_svg_splines": "Splines importées quasi droites traitées comme lignes",
         "result_svg_skipped": "Splines importées ignorées par limite de performance",
+        "result_ignored_splines": "Splines/SVG ignorées car l’analyse SVG est désactivée",
+        "result_active_count": "Courbes prises en compte par le garde-fou",
         "result_preview_limited": "Prévisualisation géométrique ignorée par limite de performance",
         "result_selection_limited": "Sélection limitée pour les performances",
         "result_selected_only": "Géométrie sélectionnée uniquement",
@@ -400,6 +406,8 @@ class CleanupPlan:
         self.unsupported_skipped = 0
         self.svg_straight_spline_candidates = 0
         self.svg_spline_candidates_skipped = 0
+        self.ignored_splines_due_to_svg_disabled = 0
+        self.active_guard_curve_count = 0
         self.preview_geometry_limited = False
         self.selection_limited = False
 
@@ -2147,6 +2155,50 @@ def sketch_curve_counts(sketch):
     return counts
 
 
+
+def active_curve_count_for_settings(counts, settings):
+    """
+    Count only the curve families that the current settings can actually analyze.
+
+    Dense imported SVG sketches can contain many splines. If SVG spline analysis
+    is disabled, those splines should not make safe mode block normal cleanup of
+    ordinary sketch lines, arcs or circles.
+    """
+    if getattr(settings, "selected_geometry_only", False):
+        return 0
+
+    if getattr(settings, "line_only_fast_mode", False):
+        active = counts.get("sketchLines", 0)
+        if getattr(settings, "treat_near_straight_splines_as_lines", False):
+            active += counts.get("sketchFittedSplines", 0)
+            active += counts.get("sketchControlPointSplines", 0)
+        return active
+
+    active = (
+        counts.get("sketchLines", 0)
+        + counts.get("sketchArcs", 0)
+        + counts.get("sketchCircles", 0)
+        + counts.get("sketchEllipses", 0)
+        + counts.get("sketchEllipticalArcs", 0)
+    )
+
+    if getattr(settings, "treat_near_straight_splines_as_lines", False):
+        active += counts.get("sketchFittedSplines", 0)
+        active += counts.get("sketchControlPointSplines", 0)
+
+    return active
+
+
+def ignored_spline_count_for_settings(counts, settings):
+    """
+    Count spline/SVG entities ignored by the current settings.
+    """
+    if getattr(settings, "treat_near_straight_splines_as_lines", False):
+        return 0
+
+    return counts.get("sketchFittedSplines", 0) + counts.get("sketchControlPointSplines", 0)
+
+
 def format_sketch_counts(counts):
     """
     Format sketch curve counts for the command summary.
@@ -2169,27 +2221,27 @@ def format_sketch_counts(counts):
     ])
 
 
+
 def large_sketch_guard_message(sketch, settings):
     """
-    Return a safe-mode blocking message when the sketch is too dense.
+    Return a safe-mode blocking message when the active analyzable subset is too dense.
 
-    Parameters:
-        sketch (adsk.fusion.Sketch): Sketch to inspect.
-        settings (CleanupSettings): User settings.
-
-    Returns:
-        str | None: Blocking message, or None when analysis is allowed.
+    Dense SVG/spline geometry is not counted as blocking when SVG spline
+    analysis is disabled. This lets ordinary duplicated sketch entities be
+    cleaned even when they coexist with a large imported SVG in the same sketch.
     """
     counts = sketch_curve_counts(sketch)
+    active_count = active_curve_count_for_settings(counts, settings)
+    ignored_splines = ignored_spline_count_for_settings(counts, settings)
 
     if getattr(settings, "allow_large_sketch_analysis", False):
         return None
 
     reasons = []
 
-    if counts["total"] > MAX_SAFE_TOTAL_CURVES:
+    if active_count > MAX_SAFE_TOTAL_CURVES:
         reasons.append(
-            "total curves {} > safe limit {}".format(counts["total"], MAX_SAFE_TOTAL_CURVES)
+            "active analyzable curves {} > safe limit {}".format(active_count, MAX_SAFE_TOTAL_CURVES)
         )
 
     if counts["lines"] > MAX_SAFE_LINES:
@@ -2197,9 +2249,9 @@ def large_sketch_guard_message(sketch, settings):
             "lines {} > safe limit {}".format(counts["lines"], MAX_SAFE_LINES)
         )
 
-    if counts["splines"] > MAX_SAFE_SPLINES:
+    if getattr(settings, "treat_near_straight_splines_as_lines", False) and counts["splines"] > MAX_SAFE_SPLINES:
         reasons.append(
-            "splines {} > safe limit {}".format(counts["splines"], MAX_SAFE_SPLINES)
+            "active splines {} > safe limit {}".format(counts["splines"], MAX_SAFE_SPLINES)
         )
 
     if not reasons:
@@ -2212,19 +2264,23 @@ def large_sketch_guard_message(sketch, settings):
     message.append("")
     message.append(tr("svg_warning"))
     message.append("")
+    message.append(tr("mixed_svg_note"))
+    message.append("")
     message.append("Reason:")
     for reason in reasons:
         message.append("- " + reason)
     message.append("")
+    message.append("Active analyzable curves: {}".format(active_count))
+    message.append("Ignored SVG/spline curves: {}".format(ignored_splines))
+    message.append("")
     message.append(format_sketch_counts(counts))
     message.append("")
     message.append(
-        "Recommended first step: simplify or split the SVG before import, or run "
-        "the cleaner on smaller parts of the sketch."
+        "Recommended first step: leave SVG spline analysis disabled to clean "
+        "standard sketch geometry first, then handle SVG geometry separately."
     )
 
     return "\n".join(message)
-
 
 def curves_for_exact_duplicate_scan(sketch, settings, plan=None):
     """
@@ -2663,6 +2719,8 @@ def build_summary(plan, title=None):
 
     lines.append("{}: {}".format(tr("version_label"), ADDIN_VERSION))
     lines.append("{}: {}".format(tr("result_sketch"), plan.sketch.name))
+    lines.append("{}: {}".format(tr("result_active_count"), plan.active_guard_curve_count))
+    lines.append("{}: {}".format(tr("result_ignored_splines"), plan.ignored_splines_due_to_svg_disabled))
     lines.append("{}: {}".format(tr("result_selected_only"), "yes" if getattr(plan.settings, "selected_geometry_only", False) else "no"))
     lines.append("{}: {}".format(tr("result_line_only_fast"), "yes" if getattr(plan.settings, "line_only_fast_mode", False) else "no"))
     if getattr(plan.settings, "selected_curves", None) is not None:
@@ -3018,9 +3076,18 @@ def plan_line_merges(plan):
         })
 
 
+
 def build_cleanup_plan(sketch, settings):
-    """Analyze a sketch and build a cleanup plan using v21 performance options."""
+    """Analyze a sketch and build a cleanup plan using v23 mixed SVG rules."""
     plan = CleanupPlan(sketch, settings)
+
+    try:
+        counts = sketch_curve_counts(sketch)
+        plan.active_guard_curve_count = active_curve_count_for_settings(counts, settings)
+        plan.ignored_splines_due_to_svg_disabled = ignored_spline_count_for_settings(counts, settings)
+    except:
+        pass
+
     plan_exact_duplicate_removal(plan)
     plan_line_merges(plan)
 
@@ -3028,7 +3095,6 @@ def build_cleanup_plan(sketch, settings):
         plan_circular_merges(plan)
 
     return plan
-
 
 # -----------------------------------------------------------------------------
 # Command input helpers

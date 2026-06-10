@@ -2,7 +2,7 @@
 
 ## Version
 
-Current version: **22.0.0**
+Current version: **23.0.0**
 
 **Sketch Curve Cleaner** is an Autodesk Fusion 360 add-in that helps preview and clean duplicated or overlapping sketch curves.
 
@@ -635,7 +635,7 @@ Version 22 disables this preview mode to improve performance on dense SVG import
 The add-in version is defined in the Python source:
 
 ```python
-ADDIN_VERSION = "22.0.0"
+ADDIN_VERSION = "23.0.0"
 ```
 
 The same version is also stored in the Fusion manifest file and displayed in the
@@ -862,4 +862,50 @@ Trade-off:
 ```text
 The Test command is faster and safer, but it no longer draws the replacement
 geometry before Apply.
+```
+
+
+## Version 23: mixed SVG + normal sketch cleanup
+
+Version 23 fixes an important mixed-sketch case.
+
+Problem in earlier versions:
+
+```text
+If a normal Fusion sketch contained duplicated sketch entities and also many
+SVG-imported splines in the same sketch, the SVG density guard could block the
+whole Test. As a result, ordinary duplicated sketch lines/arcs/circles were not
+removed.
+```
+
+New behavior:
+
+```text
+- When SVG spline analysis is disabled, dense SVG/spline entities are ignored by
+  the safe-mode guard.
+- Standard sketch geometry is still analyzed:
+  - SketchLine
+  - SketchArc
+  - SketchCircle
+  - SketchEllipse
+  - SketchEllipticalArc
+- Normal duplicated sketch elements can therefore be cleaned even when a dense
+  imported SVG exists in the same sketch.
+```
+
+The Test summary now reports:
+
+```text
+Curves considered by safe-mode guard
+Splines/SVG ignored because SVG analysis is disabled
+```
+
+Recommended mixed-sketch workflow:
+
+```text
+1. Leave "Treat near-straight SVG/imported splines as lines" disabled.
+2. Leave "Allow large sketch analysis" disabled.
+3. Run Test.
+4. Apply only if the summary shows the expected standard sketch duplicates.
+5. Treat SVG geometry separately with clean_svg.py or Selected geometry only.
 ```
