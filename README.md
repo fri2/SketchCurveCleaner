@@ -2,7 +2,7 @@
 
 ## Version
 
-Current version: **29.0.0**
+Current version: **2.39.0**
 
 **Sketch Curve Cleaner** is an Autodesk Fusion 360 add-in that helps preview and clean duplicated or overlapping sketch curves.
 
@@ -635,7 +635,7 @@ Version 22 disables this preview mode to improve performance on dense SVG import
 The add-in version is defined in the Python source:
 
 ```python
-ADDIN_VERSION = "29.0.0"
+ADDIN_VERSION = "2.39.0"
 ```
 
 The same version is also stored in the Fusion manifest file and displayed in the
@@ -1135,3 +1135,292 @@ circular_count_to_create
 The performance/safety limits group is also closed by default again. The editable
 limits remain available in the interface; expand the group when you need to
 change them.
+
+
+## Version 30: force exact duplicate deletion
+
+Version 30 adds an advanced option:
+
+```text
+Force exact duplicate deletion (advanced)
+```
+
+Use this when exact duplicate lines/curves are detected visually but are not
+removed because they are fixed/green, projected/reference geometry, or otherwise
+protected by the normal safety filters.
+
+Behavior:
+
+```text
+- applies only to exact duplicate detection;
+- bypasses the user-level fixed/green and reference protection filters for exact duplicates;
+- still cannot delete curves that Fusion reports as not deletable;
+- does not force partial line or circular merge operations.
+```
+
+Recommended use:
+
+```text
+1. Prefer "Selected geometry only".
+2. Select only the duplicated curves you want to clean.
+3. Enable "Force exact duplicate deletion (advanced)".
+4. Click Test.
+5. Apply only if the summary looks correct.
+```
+
+Important warning:
+
+```text
+This mode may delete fixed/green or projected/reference duplicate geometry.
+Use it on a copy or on a small selection first.
+```
+
+If duplicates are still not removed, they are probably not exact duplicates within
+the current tolerance, or they are different curve types after SVG/Fusion import.
+Increase tolerance gradually or isolate a small test selection.
+
+
+## Version 31: Apply uses the last Test plan
+
+Version 31 fixes a mismatch between Test and Apply.
+
+Previous behavior:
+
+```text
+1. Test built a valid cleanup plan.
+2. Test selected the curves that would be deleted/replaced.
+3. Apply rebuilt a new plan from the current Fusion selection.
+4. For exact duplicates, that selection could contain only the duplicate curves,
+   not the kept reference curves, so the rebuilt Apply plan could report 0
+   exact duplicates.
+```
+
+New behavior:
+
+```text
+- after Test, Apply uses the exact same cleanup plan;
+- changing any command option invalidates the cached Test plan;
+- if Apply is clicked without a prior Test, the add-in still builds a fresh plan;
+- the final summary indicates whether the last Test result was applied;
+- the final summary also reports delete failures returned by Fusion.
+```
+
+
+## Version 32: compact command dialog
+
+Version 32 makes the Fusion command dialog shorter and denser.
+
+Changes:
+
+```text
+- the introduction is reduced to one line;
+- the permanent SVG warning block is removed from the options area;
+- the performance/safety limits group remains collapsed by default;
+- explanatory text inside the collapsed limits group is removed;
+- the result summary box is slightly shorter;
+- warning details are still shown in Test results or safety-block messages.
+```
+
+
+## Version 33: faster Fusion defaults
+
+Version 33 changes the default behavior to reduce slow Fusion UI/API work.
+
+Changes:
+
+```text
+- "Fast mode: lines only" is enabled by default;
+- "Limit - Test selection" defaults to 0;
+- Test no longer selects preview curves by default;
+- Apply still uses the last Test plan unchanged;
+- the summary now reports analysis time and apply time.
+```
+
+Why this is faster:
+
+```text
+- selecting many curves in Fusion can be very slow;
+- line-only mode avoids scanning arcs, circles, ellipses and splines unless you
+  explicitly disable it;
+- keeping Test selection at 0 avoids expensive UI highlighting on dense sketches.
+```
+
+If you need to process arcs/circles/ellipses:
+
+```text
+Disable "Fast mode: lines only", then click Test again.
+```
+
+If you want visual selection after Test:
+
+```text
+Open "Performance / safety limits" and set "Limit - Test selection" to a small
+value such as 20 or 50.
+```
+
+
+## Version 34: safer contour preservation
+
+Version 34 changes the defaults to avoid deformation of imported contours.
+
+Problem fixed:
+
+```text
+On outlines made from many short line segments, partial line merging could
+rebuild a chain of nearby/touching segments as a longer straight line. This could
+create a green replacement line that no longer followed the original blue contour.
+```
+
+New default:
+
+```text
+Merge partially overlapping straight lines (advanced) = disabled
+```
+
+This means the default cleanup is safer:
+
+```text
+- exact duplicate lines can still be deleted;
+- the add-in no longer creates replacement line geometry by default;
+- the original contour is preserved more conservatively.
+```
+
+If you enable advanced partial line merging manually, version 34 is stricter:
+
+```text
+- segments that merely touch are not merged;
+- a real measurable overlap is required;
+- very small contact/near-contact cases are ignored.
+```
+
+Recommended workflow for laser-cut contours:
+
+```text
+1. Keep advanced partial line merging disabled first.
+2. Run Test.
+3. Apply only exact duplicate cleanup.
+4. Use advanced partial line merging only on a small selected area if needed.
+```
+
+
+## Version 35: redundant line deletion without rebuilding
+
+Version 35 handles a common Fusion import case where several sketch lines remain
+stacked on the same contour segment even after exact duplicate cleanup.
+
+New option:
+
+```text
+Delete redundant overlapping line segments
+```
+
+French UI:
+
+```text
+Supprimer les segments de ligne redondants
+```
+
+Behavior:
+
+```text
+- deletes a line segment only when another existing collinear segment fully
+  covers it;
+- does not create replacement geometry;
+- does not join neighboring/touching segments;
+- keeps at least one covering segment in place;
+- respects the constrained/dimensioned geometry protection unless explicitly
+  allowed.
+```
+
+This targets the case where Fusion still reports several "Sketch Line" objects
+at the same location after cleanup.
+
+
+## Version 36: fixed/green duplicate copies
+
+Version 36 handles the case where remaining duplicate lines are fixed/green.
+
+New option:
+
+```text
+Clean fixed/green duplicate copies safely
+```
+
+French UI:
+
+```text
+Nettoyer les copies fixées/vertes en sécurité
+```
+
+Behavior:
+
+```text
+- fixed/green curves are still protected for advanced line rebuilding;
+- fixed/green duplicate copies can be considered by exact duplicate cleanup;
+- fixed/green redundant line segments can be deleted only when another covering
+  segment remains in place;
+- dimensions and non-fixed constraints remain protected unless explicitly allowed.
+```
+
+If duplicate lines still remain and the summary shows projected/reference curves
+were skipped, enable this existing option for that sketch:
+
+```text
+Also delete projected/reference geometry
+```
+
+
+## Version 2.38.0: cancellable Apply progress counter
+
+Version 2.38.0 switches to semantic versioning with major version 2 and adds a
+cancellable progress dialog during Apply.
+
+Behavior:
+
+```text
+- counts planned delete/create operations before applying;
+- displays a remaining-operation counter while Fusion is modifying the sketch;
+- shows a Cancel button;
+- clearly states that Cancel stops the current cleanup but does not roll back
+  already applied changes;
+- updates the counter progressively, without updating on every tiny step for very
+  large sketches;
+- closes the progress dialog automatically when Apply finishes or is cancelled.
+```
+
+French UI example:
+
+```text
+Opérations restantes : 42 / 75
+Annuler arrête le traitement en cours. Les modifications déjà effectuées devront
+être annulées avec Undo de Fusion.
+```
+
+This does not make Fusion itself faster, but it avoids the impression that the
+operation is stuck in an infinite loop. If Cancel is used, use Fusion Undo to
+revert the modifications already applied before cancellation.
+
+
+## Version 2.39.0: cleanup plan and dead-code review
+
+Version 2.39.0 removes code left behind by earlier preview/cleanup iterations and
+fixes the active cleanup plan.
+
+Changes:
+
+```text
+- removes duplicate function definitions that were shadowed later in the file;
+- removes the obsolete temporary-preview sketch creation function;
+- removes the obsolete preview replacement counter;
+- removes unused compact-dialog input IDs;
+- adds missing localized strings for the no-preview Test summary;
+- restores redundant overlapping line deletion in the actual build_cleanup_plan()
+  function used by Fusion.
+```
+
+The important behavioral fix is that this option is now part of the real cleanup
+plan again:
+
+```text
+Delete redundant overlapping line segments
+```

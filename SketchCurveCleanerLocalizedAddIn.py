@@ -31,6 +31,7 @@ splines are handled only as exact duplicates.
 """
 
 import math
+import time
 import traceback
 
 import adsk.core
@@ -53,7 +54,7 @@ import adsk.fusion
 # -----------------------------------------------------------------------------
 
 ADDIN_NAME = "Sketch Curve Cleaner"
-ADDIN_VERSION = "29.0.0"
+ADDIN_VERSION = "2.39.0"
 ADDIN_AUTHOR = "RICHARD Francois"
 ADDIN_LICENSE = "GPL-3.0-only"
 ADDIN_COPYRIGHT = "Copyright (C) 2026 RICHARD Francois"
@@ -69,9 +70,7 @@ DEFAULT_TOLERANCE_CM = 0.001
 MAX_SVG_SPLINES_TO_ANALYZE = 300
 MAX_SPLINE_DEFINITION_POINTS = 24
 MAX_PREVIEW_REPLACEMENT_CURVES = 300
-MAX_PREVIEW_SELECTIONS = 300
-# Version 22: Test no longer creates temporary preview geometry.
-PREVIEW_GEOMETRY_ENABLED = False
+MAX_PREVIEW_SELECTIONS = 0
 # Hard fail-fast limits used before any expensive Fusion API iteration.
 MAX_SAFE_TOTAL_CURVES = 1200
 MAX_SAFE_LINES = 1000
@@ -117,8 +116,7 @@ _STRINGS = {
             "Edit a sketch, or select a sketch in the Fusion browser, then run the command again."
         ),
         "intro": (
-            "Use Test to preview the cleanup. Apply modifies the sketch. "
-            "Temporary preview geometry is created for merged replacement curves."
+            "Test previews the cleanup. Apply modifies the sketch."
         ),
         "settings_group": "Cleanup options",
         "limits_group": "Performance / safety limits",
@@ -127,17 +125,19 @@ _STRINGS = {
         "limit_splines": "Limit - SVG/splines",
         "limit_svg_scan": "Limit - SVG splines scanned",
         "limit_selection": "Limit - Test selection",
-        "limits_warning": "Raising these limits can make Fusion slow or unresponsive on dense SVG sketches. Increase them gradually.",
-        "limits_intro": "The numeric fields below are editable. Use them to raise or lower the safety thresholds used by Test.",
         "selected_only": "Selected geometry only",
-        "line_only_fast": "Line-only fast mode for SVG imports",
+        "line_only_fast": "Fast mode: lines only",
         "ignore_fixed": "Ignore green / fixed geometry",
         "selected_none": "Selected geometry only is enabled, but no supported sketch curves are selected. Select a few curves in the target sketch, then click Test again.",
         "auto_selection_note": "Selection detected: analysis is limited to selected sketch curves. This is the recommended way to clean standard duplicates in a sketch that also contains imported SVG geometry.",
         "mixed_line_warning": "Important: imported SVG lines and manually drawn sketch lines can both appear as SketchLine. The add-in cannot reliably distinguish their origin once they are in the same sketch.",
         "ignore_fixed_warning": "Green geometry usually means fixed geometry in Fusion. This option ignores fixed/green curves, which is useful when imported SVG lines are green and normal sketch lines are blue.",
+        "force_exact_warning": "Advanced mode: exact duplicates can be deleted even when they are fixed/green or projected/reference geometry. Use Test first and prefer selected geometry.",
         "delete_exact": "Delete exact duplicate curves",
-        "merge_lines": "Split/merge partially overlapping straight lines",
+        "delete_redundant_lines": "Delete redundant overlapping line segments",
+        "clean_fixed_duplicates": "Clean fixed/green duplicate copies safely",
+        "force_exact": "Force exact duplicate deletion (advanced)",
+        "merge_lines": "Merge partially overlapping straight lines (advanced)",
         "svg_splines": "Treat near-straight SVG/imported splines as lines (slower)",
         "allow_large": "Allow large sketch analysis (can be slow)",
         "large_blocked_title": "Large sketch analysis blocked by safe mode.",
@@ -153,14 +153,17 @@ _STRINGS = {
         "apply": "Apply",
         "cancel": "Cancel",
         "summary": "Preview / result summary",
-        "preview_created": "Preview created.",
-        "preview_failed": "Preview could not be fully created.",
         "cleanup_completed": "Cleanup completed.",
+        "cleanup_cancelled": "Cleanup cancelled.",
         "nothing_to_preview": "Nothing to preview.",
+        "test_completed_no_preview": "Test completed.",
+        "no_preview_note": "No temporary preview geometry is created during Test. Affected curves may be selected if the Test selection limit is greater than 0.",
         "test_hint": "Click Test to analyze the active or selected sketch.",
         "result_sketch": "Sketch",
         "result_tolerance": "Tolerance",
         "result_exact": "Exact duplicates to delete",
+        "result_redundant_lines": "Redundant line segments to delete",
+        "result_clean_fixed_duplicates": "Clean fixed/green duplicate copies",
         "result_line_groups": "Overlapping line groups",
         "result_line_delete": "Lines to replace",
         "result_line_create": "Merged lines to create",
@@ -175,7 +178,18 @@ _STRINGS = {
         "result_auto_selected": "Automatic selection scope",
         "result_line_only_fast": "Line-only fast mode",
         "result_ignore_fixed": "Ignore fixed/green geometry",
+        "result_force_exact": "Force exact duplicate deletion",
         "result_fixed_skipped": "Fixed/green curves skipped",
+        "result_apply_failed": "Delete failures reported by Fusion",
+        "result_used_test_plan": "Applied last Test result",
+        "result_analysis_seconds": "Analysis time",
+        "result_apply_seconds": "Apply time",
+        "result_apply_cancelled": "Apply cancelled",
+        "progress_title": "Sketch cleanup",
+        "progress_remaining": "Remaining operations: {remaining} / {total}",
+        "progress_cancel_note": "Cancel stops the current cleanup. Already applied changes must be reverted with Fusion Undo.",
+        "progress_cancelled": "Cleanup cancelled. Use Fusion Undo to revert already applied changes.",
+        "progress_finishing": "Finishing cleanup...",
         "result_limit_total": "Limit: active curves",
         "result_limit_lines": "Limit: lines",
         "result_limit_splines": "Limit: active splines",
@@ -187,10 +201,6 @@ _STRINGS = {
         "result_protected": "Protected/reference curves skipped",
         "result_constrained": "Constrained/dimensioned groups skipped",
         "result_total_delete": "Total curves to delete/replace",
-        "preview_note": (
-            "Curves that would be deleted/replaced are selected. "
-            "Merged replacement curves are shown in a temporary preview sketch."
-        ),
         "warning_reference": (
             "Warning: projected/reference geometry can be important for design associativity."
         ),
@@ -218,8 +228,7 @@ _STRINGS = {
             "Édite une esquisse, ou sélectionne une esquisse dans le navigateur Fusion, puis relance la commande."
         ),
         "intro": (
-            "Utilise Test pour prévisualiser le nettoyage. Appliquer modifie l’esquisse. "
-            "Une prévisualisation temporaire est créée pour afficher les courbes fusionnées."
+            "Test prévisualise le nettoyage. Appliquer modifie l’esquisse."
         ),
         "settings_group": "Options de nettoyage",
         "limits_group": "Limites de performance / sécurité",
@@ -228,17 +237,19 @@ _STRINGS = {
         "limit_splines": "Limite - SVG/splines",
         "limit_svg_scan": "Limite - splines SVG scannées",
         "limit_selection": "Limite - sélection Test",
-        "limits_warning": "Augmenter ces limites peut rendre Fusion lent ou non réactif sur des SVG denses. Augmentez-les progressivement.",
-        "limits_intro": "Les champs numériques ci-dessous sont modifiables. Utilisez-les pour augmenter ou réduire les seuils de sécurité utilisés par Test.",
         "selected_only": "Géométrie sélectionnée uniquement",
-        "line_only_fast": "Mode rapide lignes seulement pour imports SVG",
+        "line_only_fast": "Mode rapide : lignes seulement",
         "ignore_fixed": "Ignorer la géométrie verte / fixée",
         "selected_none": "L’option géométrie sélectionnée uniquement est activée, mais aucune courbe d’esquisse prise en charge n’est sélectionnée. Sélectionnez quelques courbes dans l’esquisse cible, puis cliquez à nouveau sur Test.",
         "auto_selection_note": "Sélection détectée : l’analyse est limitée aux courbes d’esquisse sélectionnées. C’est la méthode recommandée pour nettoyer des doublons standards dans une esquisse qui contient aussi une géométrie SVG importée.",
         "mixed_line_warning": "Important : les lignes SVG importées et les lignes dessinées manuellement peuvent toutes apparaître comme SketchLine. L’add-in ne peut pas distinguer de manière fiable leur origine une fois qu’elles sont dans la même esquisse.",
         "ignore_fixed_warning": "La géométrie verte correspond généralement à une géométrie fixée dans Fusion. Cette option ignore les courbes fixées/vertes, ce qui est utile lorsque les lignes SVG importées sont vertes et les lignes normales bleues.",
+        "force_exact_warning": "Mode avancé : les doublons exacts peuvent être supprimés même s’ils sont fixés/verts ou projetés/référencés. Utilisez Test d’abord et privilégiez la géométrie sélectionnée.",
         "delete_exact": "Supprimer les courbes exactement dupliquées",
-        "merge_lines": "Découper/fusionner les lignes droites partiellement superposées",
+        "delete_redundant_lines": "Supprimer les segments de ligne redondants",
+        "clean_fixed_duplicates": "Nettoyer les copies fixées/vertes en sécurité",
+        "force_exact": "Forcer la suppression des doublons exacts (avancé)",
+        "merge_lines": "Fusionner les lignes droites partiellement superposées (avancé)",
         "svg_splines": "Traiter les splines SVG/importées quasi droites comme des lignes (plus lent)",
         "allow_large": "Autoriser l’analyse des grandes esquisses (peut être lent)",
         "large_blocked_title": "Analyse de grande esquisse bloquée par le mode sécurisé.",
@@ -254,14 +265,28 @@ _STRINGS = {
         "apply": "Appliquer",
         "cancel": "Annuler",
         "summary": "Résumé de prévisualisation / résultat",
-        "preview_created": "Prévisualisation créée.",
-        "preview_failed": "La prévisualisation n’a pas pu être entièrement créée.",
         "cleanup_completed": "Nettoyage terminé.",
+        "cleanup_cancelled": "Nettoyage annulé.",
         "nothing_to_preview": "Rien à prévisualiser.",
+        "test_completed_no_preview": "Test terminé.",
+        "no_preview_note": "Aucune géométrie temporaire de prévisualisation n’est créée pendant Test. Les courbes concernées peuvent être sélectionnées si la limite de sélection Test est supérieure à 0.",
         "test_hint": "Clique sur Test pour analyser l’esquisse active ou sélectionnée.",
         "result_sketch": "Esquisse",
         "result_tolerance": "Tolérance",
         "result_exact": "Doublons exacts à supprimer",
+        "result_redundant_lines": "Segments de ligne redondants à supprimer",
+        "result_clean_fixed_duplicates": "Nettoyer les copies fixées/vertes",
+        "result_force_exact": "Forcer la suppression des doublons exacts",
+        "result_apply_failed": "Suppressions refusées par Fusion",
+        "result_used_test_plan": "Résultat du dernier Test appliqué",
+        "result_analysis_seconds": "Temps d’analyse",
+        "result_apply_seconds": "Temps d’application",
+        "result_apply_cancelled": "Traitement annulé",
+        "progress_title": "Nettoyage de l’esquisse",
+        "progress_remaining": "Opérations restantes : {remaining} / {total}",
+        "progress_cancel_note": "Annuler arrête le traitement en cours. Les modifications déjà effectuées devront être annulées avec Undo de Fusion.",
+        "progress_cancelled": "Nettoyage annulé. Utilisez Undo de Fusion pour annuler les modifications déjà effectuées.",
+        "progress_finishing": "Finalisation du nettoyage...",
         "result_line_groups": "Groupes de lignes superposées",
         "result_line_delete": "Lignes à remplacer",
         "result_line_create": "Lignes fusionnées à créer",
@@ -288,10 +313,6 @@ _STRINGS = {
         "result_protected": "Courbes projetées/référencées ignorées",
         "result_constrained": "Groupes contraints/cotés ignorés",
         "result_total_delete": "Total de courbes à supprimer/remplacer",
-        "preview_note": (
-            "Les courbes qui seraient supprimées/remplacées sont sélectionnées. "
-            "Les courbes fusionnées sont affichées dans une esquisse temporaire."
-        ),
         "warning_reference": (
             "Attention : les géométries projetées/référencées peuvent être importantes pour l’associativité du modèle."
         ),
@@ -394,14 +415,17 @@ class CleanupSettings:
         """
         self.tolerance_cm = DEFAULT_TOLERANCE_CM
         self.delete_exact_duplicates = True
-        self.merge_partially_overlapping_lines = True
+        self.delete_redundant_overlapping_lines = True
+        self.clean_fixed_duplicate_geometry = True
+        self.force_exact_duplicate_deletion = False
+        self.merge_partially_overlapping_lines = False
         self.merge_partially_overlapping_circular_curves = False
         self.treat_near_straight_splines_as_lines = False
         self.allow_large_sketch_analysis = False
         self.selected_geometry_only = False
         self.selected_curves = None
         self.auto_selected_geometry_scope = False
-        self.line_only_fast_mode = False
+        self.line_only_fast_mode = True
         self.ignore_fixed_geometry = True
         self.max_safe_total_curves = MAX_SAFE_TOTAL_CURVES
         self.max_safe_lines = MAX_SAFE_LINES
@@ -446,6 +470,7 @@ class CleanupPlan:
         self.sketch = sketch
         self.settings = settings
         self.exact_duplicates_to_delete = []
+        self.redundant_lines_to_delete = []
         self.line_merge_groups = []
         self.circular_merge_groups = []
         self.protected_skipped = 0
@@ -458,6 +483,11 @@ class CleanupPlan:
         self.active_guard_curve_count = 0
         self.preview_geometry_limited = False
         self.selection_limited = False
+        self.delete_failures = 0
+        self.used_test_plan_for_apply = False
+        self.apply_cancelled = False
+        self.analysis_seconds = 0.0
+        self.apply_seconds = 0.0
 
     def all_curves_to_delete_or_replace(self):
         """
@@ -475,6 +505,7 @@ class CleanupPlan:
         """
         curves = []
         curves.extend(self.exact_duplicates_to_delete)
+        curves.extend(self.redundant_lines_to_delete)
 
         for group in self.line_merge_groups:
             curves.extend(group["source_curves"])
@@ -800,6 +831,11 @@ def curve_has_constraints_or_dimensions(curve):
     )
 
 
+def curve_has_dimensions_or_nonfixed_constraints(curve):
+    """Check for dimensions that should stay protected in safe duplicate cleanup."""
+    return safe_count_property(curve, "sketchDimensions") > 0
+
+
 def group_has_constraints_or_dimensions(curves):
     """
     Check whether any curve in a group is constrained or dimensioned.
@@ -880,6 +916,14 @@ def delete_curve(curve):
     except:
         pass
     return False
+
+
+def curve_identity_key(curve):
+    """Return a stable key for one Fusion curve during a command execution."""
+    try:
+        return curve.entityToken
+    except:
+        return id(curve)
 
 
 # -----------------------------------------------------------------------------
@@ -1519,21 +1563,39 @@ def line_like_group_key(curve, start, end, settings):
 def plan_exact_duplicate_removal(plan):
     """
     Populate the cleanup plan with exact duplicate deletions.
-    
-        Parameters:
-            plan (CleanupPlan): Plan to update in place.
-    
-        Returns:
-            None.
+
+    Version 30 adds force mode. In force mode, exact duplicate detection can
+    consider fixed/green and projected/reference geometry, but actual deletion is
+    still limited by Fusion's isDeletable flag during Apply.
     """
     if not plan.settings.delete_exact_duplicates:
         return
 
     by_sig = {}
+    force = getattr(plan.settings, "force_exact_duplicate_deletion", False)
+    clean_fixed_duplicates = getattr(plan.settings, "clean_fixed_duplicate_geometry", False)
 
     for curve in curves_for_exact_duplicate_scan(plan.sketch, plan.settings, plan):
-        if not is_deletable_candidate(curve, plan.settings, plan):
-            continue
+        if not force:
+            if not clean_fixed_duplicates and should_skip_fixed_geometry(curve, plan.settings, plan):
+                continue
+
+            if not is_deletable_candidate(curve, plan.settings, plan):
+                continue
+        else:
+            # In force mode, keep only Fusion-invalid or truly non-deletable
+            # curves out of the plan. Do not apply user safety filters here.
+            try:
+                if not curve.isValid:
+                    continue
+            except:
+                pass
+
+            try:
+                if not curve.isDeletable:
+                    continue
+            except:
+                pass
 
         sig = curve_signature(curve, plan.settings)
         if sig is None:
@@ -1552,6 +1614,13 @@ def plan_exact_duplicate_removal(plan):
             by_sig[sig] = candidate
         else:
             to_delete = candidate
+
+        if (
+            curve_has_dimensions_or_nonfixed_constraints(to_delete)
+            and not plan.settings.allow_constrained_or_dimensioned
+        ):
+            plan.constrained_groups_skipped += 1
+            continue
 
         if to_delete not in plan.exact_duplicates_to_delete:
             plan.exact_duplicates_to_delete.append(to_delete)
@@ -1631,7 +1700,13 @@ def point_from_line_projection(t_value, offset, ux, uy):
 
 def merge_linear_intervals(intervals, settings):
     """
-    Merge overlapping or touching intervals on one line.
+    Merge truly overlapping intervals on one line.
+
+        This is deliberately conservative. Earlier versions also merged intervals
+        that merely touched. On imported outlines made from many small segments,
+        that could turn a curved polyline into a long straight chord. For cutting
+        geometry, preserving the original contour is more important than removing
+        every possible partial overlap.
     
         Parameters:
             intervals (list): Tuples of (start, end, curve) on a support line.
@@ -1649,143 +1724,17 @@ def merge_linear_intervals(intervals, settings):
             continue
 
         last = merged[-1]
-        if t1 <= last[1] + tol(settings):
+        overlap = last[1] - t1
+        min_len = min(abs(t2 - t1), abs(last[1] - last[0]))
+        required_overlap = max(tol(settings) * 2.0, min_len * 0.01)
+
+        if overlap > required_overlap:
             last[1] = max(last[1], t2)
             last[2].append(curve)
         else:
             merged.append([t1, t2, [curve]])
 
     return merged
-
-
-def plan_line_merges(plan):
-    """
-    Find partially overlapping straight lines and plan replacements.
-    
-        Parameters:
-            plan (CleanupPlan): Plan to update in place.
-    
-        Returns:
-            None.
-    """
-    if not plan.settings.merge_partially_overlapping_lines:
-        return
-
-    sc = plan.sketch.sketchCurves
-    line_like_items = []
-
-    try:
-        lines_col = sc.sketchLines
-        for i in range(lines_col.count):
-            line = lines_col.item(i)
-            segment = line_like_segment_from_curve(line, plan.settings)
-            if segment:
-                start, end, is_spline = segment
-                line_like_items.append((line, start, end, is_spline))
-    except:
-        pass
-
-    if getattr(plan.settings, "treat_near_straight_splines_as_lines", False):
-        analyzed_svg_splines = 0
-        for collection_name in ("sketchFittedSplines", "sketchControlPointSplines"):
-            try:
-                col = getattr(sc, collection_name)
-                count = col.count
-
-                for i in range(count):
-                    if analyzed_svg_splines >= getattr(settings, "max_svg_splines_to_analyze", MAX_SVG_SPLINES_TO_ANALYZE):
-                        plan.svg_spline_candidates_skipped += max(0, count - i)
-                        break
-
-                    spline = col.item(i)
-                    analyzed_svg_splines += 1
-
-                    segment = line_like_segment_from_curve(spline, plan.settings)
-                    if segment:
-                        start, end, is_spline = segment
-                        line_like_items.append((spline, start, end, is_spline))
-                        plan.svg_straight_spline_candidates += 1
-            except:
-                pass
-
-    groups = {}
-
-    for line, p1, p2, is_spline in line_like_items:
-        if not is_deletable_candidate(line, plan.settings, plan):
-            continue
-
-        key = line_like_group_key(line, p1, p2, plan.settings)
-        if key is None:
-            continue
-
-        _construction, ux_q, uy_q, offset_q = key
-
-        ux = ux_q * tol(plan.settings)
-        uy = uy_q * tol(plan.settings)
-        offset = offset_q * tol(plan.settings)
-
-        length = math.sqrt(ux * ux + uy * uy)
-        if length <= tol(plan.settings):
-            continue
-
-        ux /= length
-        uy /= length
-
-        t1 = projection_on_line(p1, ux, uy)
-        t2 = projection_on_line(p2, ux, uy)
-
-        if t2 < t1:
-            t1, t2 = t2, t1
-
-        groups.setdefault(key, []).append((t1, t2, line))
-
-    for key, intervals in groups.items():
-        if len(intervals) < 2:
-            continue
-
-        source_curves = [item[2] for item in intervals]
-
-        if group_has_constraints_or_dimensions(source_curves) and not plan.settings.allow_constrained_or_dimensioned:
-            plan.constrained_groups_skipped += 1
-            continue
-
-        merged = merge_linear_intervals(intervals, plan.settings)
-
-        if len(merged) >= len(intervals):
-            continue
-
-        _construction, ux_q, uy_q, offset_q = key
-
-        ux = ux_q * tol(plan.settings)
-        uy = uy_q * tol(plan.settings)
-        offset = offset_q * tol(plan.settings)
-
-        length = math.sqrt(ux * ux + uy * uy)
-        if length <= tol(plan.settings):
-            continue
-
-        ux /= length
-        uy /= length
-
-        result_curves = []
-        out_is_construction = resulting_construction_state(source_curves)
-
-        for t1, t2, _curves in merged:
-            if abs(t2 - t1) <= tol(plan.settings):
-                continue
-
-            result_curves.append({
-                "type": "line",
-                "start": point_from_line_projection(t1, offset, ux, uy),
-                "end": point_from_line_projection(t2, offset, ux, uy),
-                "isConstruction": out_is_construction,
-            })
-
-        if result_curves:
-            plan.line_merge_groups.append({
-                "source_curves": source_curves,
-                "result_curves": result_curves,
-            })
 
 
 # -----------------------------------------------------------------------------
@@ -2330,71 +2279,6 @@ def large_sketch_guard_message(sketch, settings):
 
     return "\n".join(message)
 
-def curves_for_exact_duplicate_scan(sketch, settings, plan=None):
-    """
-    Yield only curve collections that are safe and useful for exact duplicates.
-
-    Dense SVG imports often contain thousands of splines. When SVG spline mode is
-    disabled, splines are deliberately skipped instead of being materialized and
-    inspected one by one.
-
-    Parameters:
-        sketch (adsk.fusion.Sketch): Sketch to scan.
-        settings (CleanupSettings): Cleanup settings.
-        plan (CleanupPlan | None): Optional plan used for skipped counters.
-
-    Yields:
-        Fusion sketch curve objects.
-    """
-    sc = sketch.sketchCurves
-
-    collections = [
-        "sketchLines",
-        "sketchArcs",
-        "sketchCircles",
-        "sketchEllipses",
-        "sketchEllipticalArcs",
-    ]
-
-    if getattr(settings, "treat_near_straight_splines_as_lines", False):
-        collections.extend(["sketchFittedSplines", "sketchControlPointSplines"])
-    else:
-        try:
-            if plan:
-                plan.unsupported_skipped += (
-                    safe_collection_count(sc, "sketchFittedSplines")
-                    + safe_collection_count(sc, "sketchControlPointSplines")
-                )
-        except:
-            pass
-
-    for name in collections:
-        try:
-            col = getattr(sc, name)
-            for i in range(col.count):
-                yield col.item(i)
-        except:
-            pass
-
-
-def build_cleanup_plan(sketch, settings):
-    """
-    Analyze a sketch and build a complete cleanup plan.
-    
-        Parameters:
-            sketch (adsk.fusion.Sketch): Sketch to analyze.
-            settings (CleanupSettings): User-selected cleanup options.
-    
-        Returns:
-            CleanupPlan: Planned changes for preview or application.
-    """
-    plan = CleanupPlan(sketch, settings)
-    plan_exact_duplicate_removal(plan)
-    plan_line_merges(plan)
-    plan_circular_merges(plan)
-    return plan
-
-
 def add_result_curve_to_sketch(sketch, result):
     """
     Create one replacement curve in a sketch.
@@ -2427,7 +2311,164 @@ def add_result_curve_to_sketch(sketch, result):
         return None
 
 
-def apply_cleanup_plan(plan):
+def count_apply_operations(plan):
+    """Count delete/create operations that Apply will attempt."""
+    attempted_delete_keys = set()
+    total = 0
+
+    for group in plan.line_merge_groups + plan.circular_merge_groups:
+        for curve in group["source_curves"]:
+            key = curve_identity_key(curve)
+            if key in attempted_delete_keys:
+                continue
+            attempted_delete_keys.add(key)
+            total += 1
+
+        total += len(group["result_curves"])
+
+    for curve in plan.exact_duplicates_to_delete + plan.redundant_lines_to_delete:
+        key = curve_identity_key(curve)
+        if key in attempted_delete_keys:
+            continue
+        attempted_delete_keys.add(key)
+        total += 1
+
+    return total
+
+
+class ApplyProgress:
+    """Small wrapper around Fusion's progress dialog with safe fallbacks."""
+    def __init__(self, ui, total):
+        self.ui = ui
+        self.total = max(0, int(total))
+        self.completed = 0
+        self.dialog = None
+        self.last_update_time = 0.0
+        self.update_step = 1 if self.total <= 200 else max(1, self.total // 100)
+        self.cancelled = False
+
+        if not ui or self.total <= 0:
+            return
+
+        try:
+            self.dialog = ui.createProgressDialog()
+            try:
+                self.dialog.isCancelButtonShown = True
+            except:
+                pass
+            self.dialog.show(
+                tr("progress_title"),
+                self.message_text(self.total),
+                0,
+                self.total,
+                0,
+            )
+            self.update(force=True)
+        except:
+            self.dialog = None
+
+    def message_text(self, remaining):
+        """Build the progress message shown inside Fusion."""
+        return "{}\n\n{}".format(
+            tr("progress_remaining").format(remaining=remaining, total=self.total),
+            tr("progress_cancel_note"),
+        )
+
+    def cancel_requested(self):
+        """Return True if the user clicked Cancel in Fusion's progress dialog."""
+        if self.cancelled:
+            return True
+
+        if not self.dialog:
+            return False
+
+        try:
+            adsk.doEvents()
+        except:
+            pass
+
+        try:
+            self.cancelled = bool(self.dialog.wasCancelled)
+        except:
+            self.cancelled = False
+
+        return self.cancelled
+
+    def raise_if_cancelled(self):
+        """Raise ApplyCancelled when the user has cancelled Apply."""
+        if self.cancel_requested():
+            raise ApplyCancelled()
+
+    def update(self, force=False):
+        """Update the visible counter without flooding Fusion's UI."""
+        if not self.dialog:
+            return
+
+        now = time.perf_counter()
+        if (
+            not force
+            and self.completed < self.total
+            and self.completed % self.update_step != 0
+            and now - self.last_update_time < 0.15
+        ):
+            return
+
+        remaining = max(0, self.total - self.completed)
+
+        try:
+            self.dialog.progressValue = min(self.completed, self.total)
+        except:
+            pass
+
+        try:
+            self.dialog.message = self.message_text(remaining)
+        except:
+            pass
+
+        try:
+            adsk.doEvents()
+        except:
+            pass
+
+        try:
+            self.cancelled = bool(self.dialog.wasCancelled)
+        except:
+            pass
+
+        self.last_update_time = now
+
+    def advance(self, amount=1):
+        """Advance the progress counter."""
+        self.completed = min(self.total, self.completed + int(amount))
+        self.update()
+
+    def close(self):
+        """Close the progress dialog."""
+        if not self.dialog:
+            return
+
+        try:
+            self.completed = self.total
+            self.dialog.progressValue = self.total
+            self.dialog.message = tr("progress_cancelled") if self.cancelled else tr("progress_finishing")
+            adsk.doEvents()
+        except:
+            pass
+
+        try:
+            self.dialog.hide()
+        except:
+            pass
+
+        self.dialog = None
+
+
+class ApplyCancelled(Exception):
+    """Internal signal used to stop Apply after the user clicks Cancel."""
+    pass
+
+
+def apply_cleanup_plan(plan, ui=None):
     """
     Apply a cleanup plan to the target sketch.
     
@@ -2449,25 +2490,51 @@ def apply_cleanup_plan(plan):
 
     deleted = 0
     created = 0
+    attempted_delete_keys = set()
+    progress = ApplyProgress(ui, count_apply_operations(plan))
 
     try:
+        progress.raise_if_cancelled()
+
         # Apply replacement groups first. Exact duplicates that are part of a
         # replacement group may become invalid; delete_curve handles that safely.
         for group in plan.line_merge_groups + plan.circular_merge_groups:
             for curve in group["source_curves"]:
+                progress.raise_if_cancelled()
+                key = curve_identity_key(curve)
+                if key in attempted_delete_keys:
+                    continue
+                attempted_delete_keys.add(key)
                 if delete_curve(curve):
                     deleted += 1
+                else:
+                    plan.delete_failures += 1
+                progress.advance()
 
             for result in group["result_curves"]:
+                progress.raise_if_cancelled()
                 if add_result_curve_to_sketch(sketch, result):
                     created += 1
+                progress.advance()
 
-        # Delete remaining exact duplicates.
-        for curve in plan.exact_duplicates_to_delete:
+        # Delete remaining exact/redundant curves.
+        for curve in plan.exact_duplicates_to_delete + plan.redundant_lines_to_delete:
+            progress.raise_if_cancelled()
+            key = curve_identity_key(curve)
+            if key in attempted_delete_keys:
+                continue
+            attempted_delete_keys.add(key)
             if delete_curve(curve):
                 deleted += 1
+            else:
+                plan.delete_failures += 1
+            progress.advance()
+
+    except ApplyCancelled:
+        plan.apply_cancelled = True
 
     finally:
+        progress.close()
         try:
             sketch.isComputeDeferred = old_deferred
         except:
@@ -2539,67 +2606,6 @@ def delete_preview_sketch(sketch):
         pass
 
 
-def create_preview_sketch(plan):
-    """
-    Create a temporary sketch showing planned replacement geometry.
-    
-        Parameters:
-            plan (CleanupPlan): Cleanup plan containing replacement curves.
-    
-        Returns:
-            adsk.fusion.Sketch | None: Created preview sketch, or None on failure.
-    """
-    sketch = plan.sketch
-    comp = get_parent_component(sketch)
-    if not comp:
-        return None
-
-    delete_preview_sketch(sketch)
-
-    try:
-        ref = sketch.referencePlane
-    except:
-        ref = None
-
-    if not ref:
-        return None
-
-    preview = None
-
-    try:
-        preview = comp.sketches.add(ref)
-        preview.name = PREVIEW_SKETCH_NAME
-
-        try:
-            preview.isComputeDeferred = True
-        except:
-            pass
-
-        for group in plan.line_merge_groups + plan.circular_merge_groups:
-            for result in group["result_curves"]:
-                curve = add_result_curve_to_sketch(preview, result)
-                if curve:
-                    try:
-                        curve.isConstruction = True
-                    except:
-                        pass
-
-        try:
-            preview.isComputeDeferred = False
-        except:
-            pass
-
-        return preview
-
-    except:
-        try:
-            if preview:
-                preview.deleteMe()
-        except:
-            pass
-        return None
-
-
 def select_curves_for_preview(ui, curves):
     """
     Select a limited sample of affected source curves after Test.
@@ -2619,6 +2625,9 @@ def select_curves_for_preview(ui, curves):
             limit = getattr(_command_state.last_plan.settings, "max_preview_selections", MAX_PREVIEW_SELECTIONS)
     except:
         pass
+
+    if limit <= 0:
+        return 0
 
     for curve in curves:
         if selected >= limit:
@@ -2711,19 +2720,6 @@ def circular_count_to_create(plan):
     return total
 
 
-def preview_replacement_curve_count(plan):
-    """
-    Count replacement curves that would be drawn for preview.
-
-    Parameters:
-        plan (CleanupPlan): Cleanup plan.
-
-    Returns:
-        int: Number of replacement curves in the plan.
-    """
-    return line_count_to_create(plan) + circular_count_to_create(plan)
-
-
 def build_summary(plan, title=None):
     """
     Build a localized text summary of a cleanup plan.
@@ -2759,11 +2755,19 @@ def build_summary(plan, title=None):
     lines.append("{}: {}".format(tr("result_auto_selected"), "yes" if getattr(plan.settings, "auto_selected_geometry_scope", False) else "no"))
     lines.append("{}: {}".format(tr("result_line_only_fast"), "yes" if getattr(plan.settings, "line_only_fast_mode", False) else "no"))
     lines.append("{}: {}".format(tr("result_ignore_fixed"), "yes" if getattr(plan.settings, "ignore_fixed_geometry", True) else "no"))
+    lines.append("{}: {}".format(tr("result_clean_fixed_duplicates"), "yes" if getattr(plan.settings, "clean_fixed_duplicate_geometry", False) else "no"))
+    lines.append("{}: {}".format(tr("result_force_exact"), "yes" if getattr(plan.settings, "force_exact_duplicate_deletion", False) else "no"))
+    lines.append("{}: {}".format(tr("result_used_test_plan"), "yes" if getattr(plan, "used_test_plan_for_apply", False) else "no"))
+    lines.append("{}: {}".format(tr("result_apply_failed"), getattr(plan, "delete_failures", 0)))
+    lines.append("{}: {:.2f} s".format(tr("result_analysis_seconds"), getattr(plan, "analysis_seconds", 0.0)))
+    lines.append("{}: {:.2f} s".format(tr("result_apply_seconds"), getattr(plan, "apply_seconds", 0.0)))
+    lines.append("{}: {}".format(tr("result_apply_cancelled"), "yes" if getattr(plan, "apply_cancelled", False) else "no"))
     if getattr(plan.settings, "selected_curves", None) is not None:
         lines.append("{}: {}".format(tr("result_selected_count"), len(plan.settings.selected_curves)))
     lines.append("{}: {} cm".format(tr("result_tolerance"), plan.settings.tolerance_cm))
     lines.append("")
     lines.append("{}: {}".format(tr("result_exact"), len(plan.exact_duplicates_to_delete)))
+    lines.append("{}: {}".format(tr("result_redundant_lines"), len(plan.redundant_lines_to_delete)))
     lines.append("{}: {}".format(tr("result_line_groups"), len(plan.line_merge_groups)))
     lines.append("{}: {}".format(tr("result_line_delete"), line_count_to_delete(plan)))
     lines.append("{}: {}".format(tr("result_line_create"), line_count_to_create(plan)))
@@ -2937,7 +2941,7 @@ def selected_curves_from_ui(ui, sketch, settings):
         except:
             pass
 
-        if should_skip_fixed_geometry(entity, settings, None):
+        if not getattr(settings, "clean_fixed_duplicate_geometry", False) and should_skip_fixed_geometry(entity, settings, None):
             continue
 
         if getattr(settings, "line_only_fast_mode", False):
@@ -2977,7 +2981,7 @@ def curves_for_exact_duplicate_scan(sketch, settings, plan=None):
     selected_curves = getattr(settings, "selected_curves", None)
     if selected_curves is not None:
         for curve in selected_curves:
-            if should_skip_fixed_geometry(curve, settings, plan):
+            if not getattr(settings, "force_exact_duplicate_deletion", False) and not getattr(settings, "clean_fixed_duplicate_geometry", False) and should_skip_fixed_geometry(curve, settings, plan):
                 continue
             if getattr(settings, "line_only_fast_mode", False) and not is_line_only_fast_curve(curve, settings):
                 continue
@@ -3035,14 +3039,14 @@ def curves_for_exact_duplicate_scan(sketch, settings, plan=None):
 
             for i in range(count):
                 curve = col.item(i)
-                if should_skip_fixed_geometry(curve, settings, plan):
+                if not getattr(settings, "force_exact_duplicate_deletion", False) and not getattr(settings, "clean_fixed_duplicate_geometry", False) and should_skip_fixed_geometry(curve, settings, plan):
                     continue
                 yield curve
         except:
             pass
 
 
-def line_like_items_for_plan(plan):
+def line_like_items_for_plan(plan, include_fixed_duplicate_candidates=False):
     """Build the line-like curve list used by line merge planning."""
     items = []
     settings = plan.settings
@@ -3050,7 +3054,7 @@ def line_like_items_for_plan(plan):
 
     if selected_curves is not None:
         for curve in selected_curves:
-            if should_skip_fixed_geometry(curve, settings, plan):
+            if not include_fixed_duplicate_candidates and should_skip_fixed_geometry(curve, settings, plan):
                 continue
             segment = line_like_segment_from_curve(curve, settings)
             if segment:
@@ -3066,7 +3070,7 @@ def line_like_items_for_plan(plan):
         lines_col = sc.sketchLines
         for i in range(lines_col.count):
             line = lines_col.item(i)
-            if should_skip_fixed_geometry(line, settings, plan):
+            if not include_fixed_duplicate_candidates and should_skip_fixed_geometry(line, settings, plan):
                 continue
             segment = line_like_segment_from_curve(line, settings)
             if segment:
@@ -3090,7 +3094,7 @@ def line_like_items_for_plan(plan):
                     spline = col.item(i)
                     analyzed_svg_splines += 1
 
-                    if should_skip_fixed_geometry(spline, settings, plan):
+                    if not include_fixed_duplicate_candidates and should_skip_fixed_geometry(spline, settings, plan):
                         continue
 
                     segment = line_like_segment_from_curve(spline, settings)
@@ -3102,6 +3106,119 @@ def line_like_items_for_plan(plan):
                 pass
 
     return items
+
+
+def planned_delete_key_set(plan):
+    """Return identity keys for curves already planned for deletion."""
+    keys = set()
+    for curve in plan.exact_duplicates_to_delete:
+        keys.add(curve_identity_key(curve))
+    for curve in plan.redundant_lines_to_delete:
+        keys.add(curve_identity_key(curve))
+    return keys
+
+
+def interval_contains_interval(container, contained, settings):
+    """Check whether one projected line interval fully contains another."""
+    c1, c2, _curve = container
+    t1, t2, _candidate = contained
+    tolerance = tol(settings)
+
+    if c2 - c1 <= tolerance or t2 - t1 <= tolerance:
+        return False
+
+    return c1 <= t1 + tolerance and c2 >= t2 - tolerance
+
+
+def plan_redundant_overlapping_line_deletion(plan):
+    """
+    Delete line segments that are already fully covered by another line segment.
+
+    This is safer than partial line merging because it never creates replacement
+    geometry. It only removes a segment when the existing sketch still contains
+    another collinear segment covering the same interval.
+    """
+    if not getattr(plan.settings, "delete_redundant_overlapping_lines", True):
+        return
+
+    groups = {}
+    planned_delete_keys = planned_delete_key_set(plan)
+    include_fixed_duplicates = getattr(plan.settings, "clean_fixed_duplicate_geometry", False)
+
+    for line, p1, p2, _is_spline in line_like_items_for_plan(plan, include_fixed_duplicate_candidates=include_fixed_duplicates):
+        key_token = curve_identity_key(line)
+        if key_token in planned_delete_keys:
+            continue
+
+        if not is_deletable_candidate(line, plan.settings, plan):
+            continue
+
+        key = line_like_group_key(line, p1, p2, plan.settings)
+        if key is None:
+            continue
+
+        _construction, ux_q, uy_q, offset_q = key
+        ux = ux_q * tol(plan.settings)
+        uy = uy_q * tol(plan.settings)
+
+        length = math.sqrt(ux * ux + uy * uy)
+        if length <= tol(plan.settings):
+            continue
+
+        ux /= length
+        uy /= length
+
+        t1 = projection_on_line(p1, ux, uy)
+        t2 = projection_on_line(p2, ux, uy)
+        if t2 < t1:
+            t1, t2 = t2, t1
+
+        if t2 - t1 <= tol(plan.settings):
+            continue
+
+        groups.setdefault(key, []).append((t1, t2, line))
+
+    for _key, intervals in groups.items():
+        if len(intervals) < 2:
+            continue
+
+        # Try deleting the least valuable curves first, so constrained or fixed
+        # geometry is kept when several equivalent covering choices exist.
+        candidates = sorted(
+            intervals,
+            key=lambda item: (
+                keep_score(item[2]),
+                item[1] - item[0],
+                str(curve_identity_key(item[2])),
+            )
+        )
+
+        for candidate in candidates:
+            candidate_curve = candidate[2]
+            candidate_key = curve_identity_key(candidate_curve)
+            if candidate_key in planned_delete_keys:
+                continue
+
+            if (
+                curve_has_dimensions_or_nonfixed_constraints(candidate_curve)
+                and not plan.settings.allow_constrained_or_dimensioned
+            ):
+                plan.constrained_groups_skipped += 1
+                continue
+
+            for other in intervals:
+                other_curve = other[2]
+                other_key = curve_identity_key(other_curve)
+
+                if other_key == candidate_key or other_key in planned_delete_keys:
+                    continue
+
+                if not interval_contains_interval(other, candidate, plan.settings):
+                    continue
+
+                plan.redundant_lines_to_delete.append(candidate_curve)
+                planned_delete_keys.add(candidate_key)
+                break
 
 
 def plan_line_merges(plan):
@@ -3198,6 +3315,7 @@ def build_cleanup_plan(sketch, settings):
         pass
 
     plan_exact_duplicate_removal(plan)
+    plan_redundant_overlapping_line_deletion(plan)
     plan_line_merges(plan)
 
     if not getattr(settings, "line_only_fast_mode", False):
@@ -3213,6 +3331,9 @@ _INPUT_IDS = {
     "intro": "introText",
     "settings_group": "settingsGroup",
     "delete_exact": "deleteExact",
+    "delete_redundant_lines": "deleteRedundantLines",
+    "clean_fixed_duplicates": "cleanFixedDuplicateGeometry",
+    "force_exact": "forceExactDuplicateDeletion",
     "selected_only": "selectedOnly",
     "line_only_fast": "lineOnlyFast",
     "ignore_fixed": "ignoreFixedGeometry",
@@ -3221,13 +3342,10 @@ _INPUT_IDS = {
     "limit_splines": "limitSplines",
     "limit_svg_scan": "limitSvgScan",
     "limit_selection": "limitSelection",
-    "limits_warning": "limitsWarning",
-    "limits_intro": "limitsIntro",
     "merge_lines": "mergeLines",
     "merge_circular": "mergeCircular",
     "svg_splines": "svgSplinesAsLines",
     "allow_large": "allowLargeSketchAnalysis",
-    "svg_warning": "svgWarning",
     "allow_reference": "allowReference",
     "allow_constrained": "allowConstrained",
     "merge_construction": "mergeConstruction",
@@ -3255,37 +3373,37 @@ def add_command_inputs(cmd):
     except:
         pass
 
-    intro_text = "{}\n\n{}: {}".format(
+    intro_text = "{}  {}: {}".format(
         tr("intro"),
         tr("version_label"),
         ADDIN_VERSION,
     )
-    inputs.addTextBoxCommandInput(_INPUT_IDS["intro"], "", intro_text, 4, True)
+    inputs.addTextBoxCommandInput(_INPUT_IDS["intro"], "", intro_text, 1, True)
 
     group = inputs.addGroupCommandInput(_INPUT_IDS["settings_group"], tr("settings_group"))
     group.isExpanded = True
     group_inputs = group.children
 
     group_inputs.addBoolValueInput(_INPUT_IDS["delete_exact"], tr("delete_exact"), True, "", True)
+    group_inputs.addBoolValueInput(_INPUT_IDS["delete_redundant_lines"], tr("delete_redundant_lines"), True, "", True)
+    group_inputs.addBoolValueInput(_INPUT_IDS["clean_fixed_duplicates"], tr("clean_fixed_duplicates"), True, "", True)
+    group_inputs.addBoolValueInput(_INPUT_IDS["force_exact"], tr("force_exact"), True, "", False)
     group_inputs.addBoolValueInput(_INPUT_IDS["selected_only"], tr("selected_only"), True, "", False)
-    group_inputs.addBoolValueInput(_INPUT_IDS["line_only_fast"], tr("line_only_fast"), True, "", False)
+    group_inputs.addBoolValueInput(_INPUT_IDS["line_only_fast"], tr("line_only_fast"), True, "", True)
     group_inputs.addBoolValueInput(_INPUT_IDS["ignore_fixed"], tr("ignore_fixed"), True, "", True)
-    group_inputs.addBoolValueInput(_INPUT_IDS["merge_lines"], tr("merge_lines"), True, "", True)
+    group_inputs.addBoolValueInput(_INPUT_IDS["merge_lines"], tr("merge_lines"), True, "", False)
     group_inputs.addBoolValueInput(_INPUT_IDS["merge_circular"], tr("merge_circular"), True, "", False)
     group_inputs.addBoolValueInput(_INPUT_IDS["svg_splines"], tr("svg_splines"), True, "", False)
     group_inputs.addBoolValueInput(_INPUT_IDS["allow_large"], tr("allow_large"), True, "", False)
-    group_inputs.addTextBoxCommandInput(_INPUT_IDS["svg_warning"], "", tr("svg_warning"), 4, True)
 
     limits_group = inputs.addGroupCommandInput("performanceLimitsGroup", tr("limits_group"))
     limits_group.isExpanded = False
     limits_inputs = limits_group.children
-    limits_inputs.addTextBoxCommandInput(_INPUT_IDS["limits_intro"], "", tr("limits_intro"), 2, True)
     limits_inputs.addIntegerSpinnerCommandInput(_INPUT_IDS["limit_total_curves"], tr("limit_total_curves"), 100, 100000, 100, MAX_SAFE_TOTAL_CURVES)
     limits_inputs.addIntegerSpinnerCommandInput(_INPUT_IDS["limit_lines"], tr("limit_lines"), 100, 100000, 100, MAX_SAFE_LINES)
     limits_inputs.addIntegerSpinnerCommandInput(_INPUT_IDS["limit_splines"], tr("limit_splines"), 10, 100000, 10, MAX_SAFE_SPLINES)
     limits_inputs.addIntegerSpinnerCommandInput(_INPUT_IDS["limit_svg_scan"], tr("limit_svg_scan"), 0, 100000, 50, MAX_SVG_SPLINES_TO_ANALYZE)
     limits_inputs.addIntegerSpinnerCommandInput(_INPUT_IDS["limit_selection"], tr("limit_selection"), 0, 100000, 50, MAX_PREVIEW_SELECTIONS)
-    limits_inputs.addTextBoxCommandInput(_INPUT_IDS["limits_warning"], "", tr("limits_warning"), 3, True)
 
     group_inputs.addBoolValueInput(_INPUT_IDS["allow_reference"], tr("allow_reference"), True, "", False)
     group_inputs.addBoolValueInput(_INPUT_IDS["allow_constrained"], tr("allow_constrained"), True, "", False)
@@ -3299,7 +3417,7 @@ def add_command_inputs(cmd):
         pass
 
     inputs.addBoolValueInput(_INPUT_IDS["test"], tr("test"), False, "", False)
-    inputs.addTextBoxCommandInput(_INPUT_IDS["summary"], tr("summary"), tr("test_hint"), 12, True)
+    inputs.addTextBoxCommandInput(_INPUT_IDS["summary"], tr("summary"), tr("test_hint"), 9, True)
 
 
 def get_input_by_id(inputs, input_id):
@@ -3369,15 +3487,18 @@ def read_settings_from_inputs(inputs):
             return int(default)
 
     settings.delete_exact_duplicates = bool_value(_INPUT_IDS["delete_exact"], True)
+    settings.delete_redundant_overlapping_lines = bool_value(_INPUT_IDS["delete_redundant_lines"], True)
+    settings.clean_fixed_duplicate_geometry = bool_value(_INPUT_IDS["clean_fixed_duplicates"], True)
+    settings.force_exact_duplicate_deletion = bool_value(_INPUT_IDS["force_exact"], False)
     settings.selected_geometry_only = bool_value(_INPUT_IDS["selected_only"], False)
-    settings.line_only_fast_mode = bool_value(_INPUT_IDS["line_only_fast"], False)
+    settings.line_only_fast_mode = bool_value(_INPUT_IDS["line_only_fast"], True)
     settings.ignore_fixed_geometry = bool_value(_INPUT_IDS["ignore_fixed"], True)
     settings.max_safe_total_curves = max(0, integer_value(_INPUT_IDS["limit_total_curves"], MAX_SAFE_TOTAL_CURVES))
     settings.max_safe_lines = max(0, integer_value(_INPUT_IDS["limit_lines"], MAX_SAFE_LINES))
     settings.max_safe_splines = max(0, integer_value(_INPUT_IDS["limit_splines"], MAX_SAFE_SPLINES))
     settings.max_svg_splines_to_analyze = max(0, integer_value(_INPUT_IDS["limit_svg_scan"], MAX_SVG_SPLINES_TO_ANALYZE))
     settings.max_preview_selections = max(0, integer_value(_INPUT_IDS["limit_selection"], MAX_PREVIEW_SELECTIONS))
-    settings.merge_partially_overlapping_lines = bool_value(_INPUT_IDS["merge_lines"], True)
+    settings.merge_partially_overlapping_lines = bool_value(_INPUT_IDS["merge_lines"], False)
     settings.merge_partially_overlapping_circular_curves = bool_value(_INPUT_IDS["merge_circular"], False)
     settings.treat_near_straight_splines_as_lines = bool_value(_INPUT_IDS["svg_splines"], False)
     settings.allow_large_sketch_analysis = bool_value(_INPUT_IDS["allow_large"], False)
@@ -3544,7 +3665,14 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
             inputs = cmd.commandInputs
 
             if changed.id != _INPUT_IDS["test"]:
+                _command_state.last_plan = None
                 return
+
+            try:
+                if not changed.value:
+                    return
+            except:
+                pass
 
             try:
                 changed.value = False
@@ -3585,7 +3713,9 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
                     set_textbox_text(summary_box, guard)
                 return
 
+            start_time = time.perf_counter()
             plan = build_cleanup_plan(sketch, settings)
+            plan.analysis_seconds = time.perf_counter() - start_time
             _command_state.last_plan = plan
 
             affected_curves = plan.all_curves_to_delete_or_replace()
@@ -3598,12 +3728,14 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
 
             if plan.has_changes():
                 summary = build_summary(plan, tr("test_completed_no_preview"))
-                summary += "\n\n" + tr("no_preview_note")
+                summary += "\n" + tr("no_preview_note")
                 if getattr(settings, "auto_selected_geometry_scope", False):
-                    summary += "\n\n" + tr("auto_selection_note")
+                    summary += "\n" + tr("auto_selection_note")
                     summary += "\n" + tr("mixed_line_warning")
                 if getattr(settings, "ignore_fixed_geometry", True):
-                    summary += "\n\n" + tr("ignore_fixed_warning")
+                    summary += "\n" + tr("ignore_fixed_warning")
+                if getattr(settings, "force_exact_duplicate_deletion", False):
+                    summary += "\n" + tr("force_exact_warning")
                 summary += "\nSelected curves: {} / {}".format(selected, len(affected_curves))
             else:
                 summary = build_summary(plan, tr("nothing_to_preview"))
@@ -3647,33 +3779,56 @@ class CommandExecuteHandler(adsk.core.CommandEventHandler):
                 ui.messageBox(tr("no_sketch"), ADDIN_NAME)
                 return
 
-            settings = read_settings_from_inputs(inputs)
             delete_preview_sketch(sketch)
 
-            scope_error = prepare_analysis_scope_from_selection(ui, sketch, settings)
-            if scope_error:
-                ui.messageBox(scope_error, ADDIN_NAME)
-                return
+            plan = _command_state.last_plan
+            if plan is not None:
+                try:
+                    if plan.sketch != sketch:
+                        plan = None
+                except:
+                    plan = None
 
-            if getattr(settings, "selected_geometry_only", False):
-                guard = None
+            if plan is not None:
+                plan.used_test_plan_for_apply = True
+                plan.delete_failures = 0
+                plan.apply_cancelled = False
             else:
-                guard = large_sketch_guard_message(sketch, settings)
+                settings = read_settings_from_inputs(inputs)
 
-            if guard:
-                ui.messageBox(guard, ADDIN_NAME)
-                return
+                scope_error = prepare_analysis_scope_from_selection(ui, sketch, settings)
+                if scope_error:
+                    ui.messageBox(scope_error, ADDIN_NAME)
+                    return
 
-            plan = build_cleanup_plan(sketch, settings)
+                if getattr(settings, "selected_geometry_only", False):
+                    guard = None
+                else:
+                    guard = large_sketch_guard_message(sketch, settings)
 
-            deleted, created = apply_cleanup_plan(plan)
+                if guard:
+                    ui.messageBox(guard, ADDIN_NAME)
+                    return
+
+                start_time = time.perf_counter()
+                plan = build_cleanup_plan(sketch, settings)
+                plan.analysis_seconds = time.perf_counter() - start_time
+                plan.used_test_plan_for_apply = False
+                plan.apply_cancelled = False
+
+            start_time = time.perf_counter()
+            deleted, created = apply_cleanup_plan(plan, ui)
+            plan.apply_seconds = time.perf_counter() - start_time
 
             _command_state.last_plan = plan
             _command_state.applied = True
 
-            summary = build_summary(plan, tr("cleanup_completed"))
+            summary_title = tr("cleanup_cancelled") if getattr(plan, "apply_cancelled", False) else tr("cleanup_completed")
+            summary = build_summary(plan, summary_title)
             summary += "\n\nDeleted/replaced curves: {}".format(deleted)
             summary += "\nCreated replacement curves: {}".format(created)
+            if getattr(plan, "apply_cancelled", False):
+                summary += "\n\n" + tr("progress_cancelled")
 
             ui.messageBox(summary, ADDIN_NAME)
 
@@ -3742,8 +3897,9 @@ class CommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
         try:
             app = adsk.core.Application.get()
             ui = app.userInterface
-
             cmd = adsk.core.Command.cast(args.command)
+            _command_state.last_plan = None
+            _command_state.applied = False
             add_command_inputs(cmd)
 
             input_changed = CommandInputChangedHandler()
